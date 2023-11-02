@@ -1,0 +1,24 @@
+[package]
+name = "faser-uring"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+faser-executor = { path = "../faser-executor" }
+futures-core = "0.3.29"
+io-uring = {version = "0.6.2", features = ["io_safety"]}
+libc = "0.2.149"
+pin-project-lite = "0.2.13"
+smallvec = "1.11.1"
+sptr = "0.3.2"
+pin-list = "0.1.0"
+thiserror = "1.0.50"
+log = { version = "0.4.20", features = ["kv_unstable"] }
+
+[dev-dependencies]
+env_logger = "0.10.0"
+futures-test = "0.3.29"
+futures-util = "0.3.29"
+

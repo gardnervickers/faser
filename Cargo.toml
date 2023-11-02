@@ -1,0 +1,3 @@
+[workspace]
+resolver = "2"
+members = [ "faser-executor", "faser-task" , "faser-uring"]
