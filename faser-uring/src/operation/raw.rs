@@ -107,11 +107,11 @@ pub(crate) struct CQEResult {
 }
 
 impl CQEResult {
-    pub(super) fn new(result: io::Result<u32>, flags: u32) -> Self {
+    pub(crate) fn new(result: io::Result<u32>, flags: u32) -> Self {
         Self { result, flags }
     }
 
-    pub(super) fn more(&self) -> bool {
+    pub(crate) fn more(&self) -> bool {
         io_uring::cqueue::more(self.flags)
     }
 }
@@ -131,13 +131,13 @@ impl From<NonNull<Header>> for RawOpRef {
 impl RawOpRef {
     /// Returns a reference to the [`Header`] for this operation.
     #[inline]
-    pub(super) fn header(&self) -> &Header {
+    pub(crate) fn header(&self) -> &Header {
         // Safety: `inner` is a valid pointer to a `Header`.
         //          We only ever access the header through immutable references.
         unsafe { self.inner.as_ref() }
     }
 
-    pub(super) fn inner(&self) -> NonNull<Header> {
+    pub(crate) fn inner(&self) -> NonNull<Header> {
         self.inner
     }
 
@@ -204,7 +204,7 @@ impl RawOpRef {
     }
 
     #[inline]
-    pub(super) fn is_complete(&self) -> bool {
+    pub(crate) fn is_complete(&self) -> bool {
         let header = self.header();
         header.is_complete()
     }

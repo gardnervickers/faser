@@ -10,15 +10,15 @@ use super::CQEResult;
 /// There will be multiple references to the header outstanding, so
 /// it is important that all fields in the header support interior
 /// mutability.
-pub(super) struct Header {
+pub(crate) struct Header {
     refcount: Cell<usize>,
     waker: RefCell<Option<Waker>>,
     completions: RefCell<smallvec::SmallVec<[CQEResult; 4]>>,
     complete: Cell<bool>,
-    pub(super) vtable: &'static VTable,
+    pub(crate) vtable: &'static VTable,
 }
 
-pub(super) struct VTable {
+pub(crate) struct VTable {
     /// Called when a handle to the [`Header`] is dropped.
     ///
     /// This should call [`Header::dec_refcount`] and obey
@@ -28,7 +28,7 @@ pub(super) struct VTable {
     /// # Safety:
     /// Callers must ensure that the pointer is valid and points
     /// to a valid [`Header`].
-    pub(super) drop_ref: unsafe fn(NonNull<Header>),
+    pub(crate) drop_ref: unsafe fn(NonNull<Header>),
 
     /// Called when a handle to the [`Header`] is cloned.
     ///
@@ -37,7 +37,7 @@ pub(super) struct VTable {
     /// # Safety:
     /// Callers must ensure that the pointer is valid and points
     /// to a valid [`Header`].
-    pub(super) clone_ref: unsafe fn(NonNull<Header>),
+    pub(crate) clone_ref: unsafe fn(NonNull<Header>),
 
     /// Called when a completion is received for the operation.
     ///
@@ -51,14 +51,14 @@ pub(super) struct VTable {
     /// # Safety:
     /// Callers must ensure that the pointer is valid and points
     /// to a valid [`Header`].
-    pub(super) complete: unsafe fn(NonNull<Header>, result: CQEResult) -> bool,
+    pub(crate) complete: unsafe fn(NonNull<Header>, result: CQEResult) -> bool,
 }
 
 impl Header {
     /// Create a new [`Header`] with the given vtable.
     ///
     /// The header will have a refcount of 1 initially.
-    pub(super) fn new(vtable: &'static VTable) -> Self {
+    pub(crate) fn new(vtable: &'static VTable) -> Self {
         Self {
             refcount: Cell::new(1),
             waker: Default::default(),
@@ -69,7 +69,7 @@ impl Header {
     }
 
     /// Increment the refcount of the header.
-    pub(super) fn inc_refcount(&self) {
+    pub(crate) fn inc_refcount(&self) {
         assert!(self.refcount.get() > 0);
         self.refcount.set(self.refcount.get() + 1);
     }
@@ -77,31 +77,31 @@ impl Header {
     /// Decrement the refcount of the header.
     ///
     /// Returns `true` if the refcount is now zero.
-    pub(super) fn dec_refcount(&self) -> bool {
+    pub(crate) fn dec_refcount(&self) -> bool {
         assert!(self.refcount.get() > 0);
         self.refcount.set(self.refcount.get() - 1);
         self.refcount.get() == 0
     }
 
     /// Returns the current refcount of the header.
-    pub(super) fn refcount(&self) -> usize {
+    pub(crate) fn refcount(&self) -> usize {
         self.refcount.get()
     }
 
     /// Returns a reference to the completion list.
-    pub(super) fn completions(&self) -> &RefCell<smallvec::SmallVec<[CQEResult; 4]>> {
+    pub(crate) fn completions(&self) -> &RefCell<smallvec::SmallVec<[CQEResult; 4]>> {
         &self.completions
     }
 
     /// Returns a mutable reference to the completion list.
-    pub(super) fn completions_mut(&mut self) -> &mut RefCell<smallvec::SmallVec<[CQEResult; 4]>> {
+    pub(crate) fn completions_mut(&mut self) -> &mut RefCell<smallvec::SmallVec<[CQEResult; 4]>> {
         &mut self.completions
     }
 
     /// Returns true if there are no more completions to be received.
     ///
     /// This should be called
-    pub(super) fn is_complete(&self) -> bool {
+    pub(crate) fn is_complete(&self) -> bool {
         self.complete.get()
     }
 
@@ -109,19 +109,19 @@ impl Header {
     ///
     /// # Safety
     /// This should **only** be called if CQEResult::more returns false.
-    pub(super) unsafe fn set_complete(&self) {
+    pub(crate) unsafe fn set_complete(&self) {
         self.complete.set(true);
     }
 
     /// Take the waker from the header.
-    pub(super) fn take_waker(&self) -> Option<Waker> {
+    pub(crate) fn take_waker(&self) -> Option<Waker> {
         self.waker.borrow_mut().take()
     }
 
     /// Set the waker for the header.
     ///
     /// Existing wakers will be overwritten.
-    pub(super) fn set_waker(&self, waker: &Waker) {
+    pub(crate) fn set_waker(&self, waker: &Waker) {
         *self.waker.borrow_mut() = Some(waker.clone());
     }
 }
