@@ -28,7 +28,5 @@ pub async fn noop() {
             Ok(())
         }
     }
-
-    let op = crate::operation::Op::new(Nop {}, handle);
-    let _ = op.await;
+    handle.submit(Nop).await.unwrap().unwrap();
 }

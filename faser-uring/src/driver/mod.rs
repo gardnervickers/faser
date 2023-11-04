@@ -5,11 +5,12 @@ use std::{io, mem};
 
 use faser_executor::park::{Park, ParkMode};
 use io_uring::squeue::{Flags, PushError};
-use io_uring::types::{CancelBuilder, SubmitArgs, Timespec};
+use io_uring::types::{self, CancelBuilder, SubmitArgs, Timespec};
 use io_uring::{cqueue, opcode, IoUring};
 use log::{debug, error, trace, warn};
 
-use crate::operation::{complete_operation, ConfiguredEntry, RawOpRef};
+use crate::fd;
+use crate::operation::{complete_operation, ConfiguredEntry, Op, Operation, RawOpRef};
 use crate::util::notify::Notify;
 pub(crate) use futures::PushFuture;
 
@@ -80,8 +81,21 @@ impl Handle {
         context::DriverContext::handle().expect("not in driver context")
     }
 
-    pub(crate) fn cancel(&self, entry: RawOpRef) -> io::Result<()> {
-        self.shared.cancel(entry.as_raw_usize())
+    pub(crate) fn submit<T>(&self, op: T) -> Op<T>
+    where
+        T: Operation + 'static,
+    {
+        Op::new(op, self.clone())
+    }
+
+    /// Issue a cancellation request.
+    ///
+    /// Setting `sync` to true will cause the cancellation to
+    /// be performed synchronously. If `sync` is false, async
+    /// cancellation will be attempted first followed by sync
+    /// cancellation if the async cancellation fails.
+    pub(crate) fn cancel(&self, criteria: CancelBuilder, sync: bool) -> io::Result<()> {
+        self.shared.cancel(criteria, sync)
     }
 
     /// Attempt to push a new entry into the submission queue.
@@ -90,6 +104,10 @@ impl Handle {
     /// is space or the driver has shutdown.
     pub(crate) fn push(&self, entry: ConfiguredEntry) -> PushFuture {
         PushFuture::new(Rc::clone(&self.shared), entry)
+    }
+
+    pub(crate) fn close_fd(&self, kind: &fd::FdKind) -> io::Result<()> {
+        self.shared.close_fd(kind)
     }
 }
 
@@ -102,6 +120,9 @@ impl Driver {
 
     /// [Driver::CANCELLATION_TOKEN] is a special token which is used to signal cancellation events.
     const CANCELLATION_TOKEN: usize = 0x03;
+
+    /// [Driver::CLOSE_FD_TOKEN] is a special token which is used to signal close fd events.
+    const CLOSE_FD_TOKEN: usize = 0x04;
 
     /// Create a new [`Driver`] with the provided size from the provided [`io_uring::Builder`].
     pub fn new(mut builder: io_uring::Builder, size: u32) -> io::Result<Self> {
@@ -203,6 +224,11 @@ impl Driver {
 
                 if user_data == Self::CANCELLATION_TOKEN {
                     trace!(target: LOG, "cancellation.token");
+                    continue;
+                }
+
+                if user_data == Self::CLOSE_FD_TOKEN {
+                    trace!(target: LOG, "close_fd.token");
                     continue;
                 }
 
@@ -343,6 +369,26 @@ impl Shared {
         sq.push(entry)
     }
 
+    /// Attempt to push a new raw entry into the submission queue.
+    ///
+    /// If the submission queue is full, this will attempt to submit
+    /// once and then try again. If the submission fails, this will
+    /// return an error.
+    unsafe fn try_push_raw_submit(&self, entry: &io_uring::squeue::Entry) -> io::Result<()> {
+        if self.try_push_raw(entry).is_err() {
+            // Try to make space.
+            self.submit(ParkMode::NoPark)?;
+        }
+        // Try again.
+        self.try_push_raw(entry).map_err(|err| {
+            io::Error::new(
+                io::ErrorKind::Other,
+                format!("failed to push entry: {:?}", err),
+            )
+        })?;
+        Ok(())
+    }
+
     /// Submit all entries in the submission queue.
     ///
     /// The provided `ParkMode` is used to determine if the
@@ -373,27 +419,36 @@ impl Shared {
     /// Cancel a specific request synchronously.
     ///
     /// Returns an error if the request could not be cancelled.
-    fn cancel(&self, user_data: usize) -> io::Result<()> {
+    fn cancel(&self, criteria: CancelBuilder, sync: bool) -> io::Result<()> {
         // Submit all unsubmitted entries to the ring so that we can cancel them.
         self.submit(ParkMode::NoPark)?;
-        // Try async cancel first
 
-        let criteria = CancelBuilder::user_data(user_data as u64);
         // First try to submit an async cancel request, this avoids a syscall.
         let mut ring = self.ring.borrow_mut();
-        let mut sq = ring.submission();
-        if !sq.is_full() {
-            let cancel = opcode::AsyncCancel2::new(criteria)
-                .build()
-                .flags(Flags::SKIP_SUCCESS)
-                .user_data(Driver::CANCELLATION_TOKEN as u64);
-            unsafe { sq.push(&cancel) }.unwrap();
-            return Ok(());
+        if !sync {
+            let mut sq = ring.submission();
+            if !sq.is_full() {
+                let cancel = opcode::AsyncCancel2::new(criteria)
+                    .build()
+                    .flags(Flags::SKIP_SUCCESS)
+                    .user_data(Driver::CANCELLATION_TOKEN as u64);
+                unsafe { sq.push(&cancel) }.unwrap();
+                return Ok(());
+            }
         }
-        drop(sq);
         let submitter = ring.submitter();
         submitter.register_sync_cancel(None, criteria)?;
+        Ok(())
+    }
 
+    fn close_fd(&self, kind: &fd::FdKind) -> io::Result<()> {
+        let entry = match kind {
+            fd::FdKind::Fd(fd) => opcode::Close::new(types::Fd(fd.0)).build(),
+            fd::FdKind::Fixed(fd) => opcode::Close::new(types::Fixed(fd.0)).build(),
+        }
+        .flags(Flags::SKIP_SUCCESS)
+        .user_data(Driver::CLOSE_FD_TOKEN as u64);
+        unsafe { self.try_push_raw_submit(&entry) }?;
         Ok(())
     }
 

@@ -6,6 +6,7 @@ use std::{io, mem};
 mod header;
 mod raw;
 
+use io_uring::types::CancelBuilder;
 pub(crate) use raw::{CQEResult, RawOpRef};
 
 use futures_core::Stream;
@@ -74,7 +75,9 @@ pin_project_lite::pin_project! {
                     if !*this.completed {
                         // Ignore the result, it is possible that the future
                         // completed before or concurrently with the Op drop.
-                        let _ = this.reactor.cancel(inner.inner.inner.clone());
+                        let user_data = inner.inner.inner.as_raw();
+                        let criteria = CancelBuilder::user_data(user_data as u64);
+                        let _ = this.reactor.cancel(criteria, false);
                     }
                 },
             }
