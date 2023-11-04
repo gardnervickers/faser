@@ -3,6 +3,7 @@ use std::pin::pin;
 
 use faser_task::JoinHandle;
 
+mod context;
 pub mod park;
 mod wakerfn;
 
@@ -29,7 +30,8 @@ impl<P: park::Park> LocalExecutor<P> {
     where
         F: Future,
     {
-        let _guard = self.park.enter();
+        let _g1 = self.park.enter();
+        let _g2 = context::Context::enter(self.handle());
         let fut = pin!(fut);
         let mut root = wakerfn::FutureHarness::new(fut);
 
@@ -58,12 +60,23 @@ pub struct Handle {
 }
 
 impl Handle {
+    pub fn current() -> Self {
+        context::Context::handle().expect("executor not set")
+    }
+
     pub fn spawn<F>(&self, future: F) -> JoinHandle<F::Output>
     where
         F: Future + 'static,
     {
         self.taskqueue.spawn(future)
     }
+}
+
+pub fn spawn<F>(future: F) -> JoinHandle<F::Output>
+where
+    F: Future + 'static,
+{
+    Handle::current().spawn(future)
 }
 
 impl<P: park::Park> Drop for LocalExecutor<P> {
@@ -131,5 +144,16 @@ mod tests {
         };
         assert!(res.is_err());
         assert!(res.err().unwrap().is_cancelled());
+    }
+
+    #[test]
+    fn spawn_from_context() {
+        let mut executor = LocalExecutor::new(SpinPark);
+
+        executor.block_on(async {
+            let f1 = crate::spawn(async { 1 + 1 });
+            let res = f1.await.unwrap();
+            assert_eq!(res, 2);
+        })
     }
 }

@@ -152,7 +152,7 @@ impl RawOpRef {
         res
     }
 
-    pub(crate) fn as_raw(&self) -> *const () {
+    fn as_raw(&self) -> *const () {
         self.inner.as_ptr() as *const ()
     }
 

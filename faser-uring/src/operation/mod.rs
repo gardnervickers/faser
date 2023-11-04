@@ -75,7 +75,7 @@ pin_project_lite::pin_project! {
                     if !*this.completed {
                         // Ignore the result, it is possible that the future
                         // completed before or concurrently with the Op drop.
-                        let user_data = inner.inner.inner.as_raw();
+                        let user_data = inner.inner.inner.as_raw_usize();
                         let criteria = CancelBuilder::user_data(user_data as u64);
                         let _ = this.reactor.cancel(criteria, false);
                     }

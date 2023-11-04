@@ -10,7 +10,7 @@ use io_uring::{cqueue, opcode, IoUring};
 use log::{debug, error, trace, warn};
 
 use crate::fd;
-use crate::operation::{complete_operation, ConfiguredEntry, Op, Operation, RawOpRef};
+use crate::operation::{complete_operation, ConfiguredEntry, Op, Operation};
 use crate::util::notify::Notify;
 pub(crate) use futures::PushFuture;
 

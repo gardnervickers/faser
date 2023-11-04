@@ -9,7 +9,6 @@
 //!
 //! Additionally, io-uring supports two types of file descriptors,
 //! regular file descriptors and fixed file descriptors.
-use std::mem;
 use std::os::fd::{AsRawFd, RawFd};
 use std::rc::Rc;
 
@@ -38,7 +37,6 @@ impl FaserFd {
     /// Create a new [`FaserFd`] from a regular file descriptor.
     pub(crate) fn from_fd(fd: RawFd) -> Self {
         let raw = fd.as_raw_fd();
-        mem::forget(fd);
         Self::new(FdKind::Fd(types::Fd(raw)))
     }
 
