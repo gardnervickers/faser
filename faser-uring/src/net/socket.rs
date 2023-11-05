@@ -34,7 +34,7 @@ impl Socket {
             protocol,
         };
         let fd = handle.submit(op).await??;
-        Ok(Self { fd })
+        Ok(Self::from_fd(fd))
     }
 
     pub(crate) async fn bind(
@@ -59,7 +59,7 @@ impl Socket {
         handle.submit(op).await.unwrap()
     }
 
-    pub(crate) async fn send_to<B>(&self, buf: B, addr: SocketAddr) -> (io::Result<(usize)>, B)
+    pub(crate) async fn send_to<B>(&self, buf: B, addr: SocketAddr) -> (io::Result<usize>, B)
     where
         B: Buf + 'static,
     {
@@ -153,16 +153,21 @@ where
         let this = unsafe { self.get_unchecked_mut() };
 
         // Initialize the slice.
-        let slice = IoSlice::new(unsafe {
-            std::slice::from_raw_parts(this.buf.chunk().as_ptr(), this.buf.chunk().len())
-        });
-        this.slices.write([slice]);
+        {
+            let slice = IoSlice::new(unsafe {
+                std::slice::from_raw_parts(this.buf.chunk().as_ptr(), this.buf.chunk().len())
+            });
+            this.slices.write([slice]);
+        }
 
         // Next we initialize the msghdr.
         let msghdr = this.msghdr.as_mut_ptr();
-        unsafe {
-            (*msghdr).msg_iov = this.slices.as_mut_ptr() as *mut _;
-            (*msghdr).msg_iovlen = 1;
+        {
+            let slices = unsafe { this.slices.assume_init_mut() };
+            unsafe {
+                (*msghdr).msg_iov = slices.as_mut_ptr() as *mut _;
+                (*msghdr).msg_iovlen = slices.len() as _;
+            }
         }
 
         // Configure the address.

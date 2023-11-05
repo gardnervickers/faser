@@ -15,6 +15,12 @@ pub struct UdpSocket {
     inner: socket::Socket,
 }
 
+impl std::fmt::Debug for UdpSocket {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UdpSocket").finish()
+    }
+}
+
 impl UdpSocket {
     /// Creates a UDP socket from the given address.
     pub async fn bind(addr: SocketAddr) -> io::Result<UdpSocket> {
@@ -38,7 +44,7 @@ impl UdpSocket {
     ///
     /// This takes ownership of the buffer provided and will return it back
     /// once the operation has completed.
-    pub async fn send_to<B>(&self, buf: B, addr: SocketAddr) -> (io::Result<(usize)>, B)
+    pub async fn send_to<B>(&self, buf: B, addr: SocketAddr) -> (io::Result<usize>, B)
     where
         B: Buf + 'static,
     {

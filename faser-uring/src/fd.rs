@@ -30,6 +30,7 @@ struct Inner {
 #[derive(Debug, Clone)]
 pub(crate) enum FdKind {
     Fd(types::Fd),
+    #[allow(dead_code)]
     Fixed(types::Fixed),
 }
 
@@ -41,6 +42,7 @@ impl FaserFd {
     }
 
     /// Create a new [`FaserFd`] from a fixed file descriptor.
+    #[allow(dead_code)]
     pub(crate) fn from_fixed(fixed: types::Fixed) -> Self {
         Self::new(FdKind::Fixed(fixed))
     }
