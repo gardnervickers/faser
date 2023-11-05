@@ -26,12 +26,12 @@ impl<P: park::Park> LocalExecutor<P> {
             taskqueue: self.taskqueue.clone(),
         }
     }
+
     pub fn block_on<F>(&mut self, fut: F) -> F::Output
     where
         F: Future,
     {
-        let _g1 = self.park.enter();
-        let _g2 = context::Context::enter(self.handle());
+        let _g = self.enter();
         let fut = pin!(fut);
         let mut root = wakerfn::FutureHarness::new(fut);
 
@@ -51,6 +51,12 @@ impl<P: park::Park> LocalExecutor<P> {
             }
             self.park.park(mode).unwrap();
         }
+    }
+
+    fn enter(&self) -> (P::Guard, context::ContextGuard) {
+        let g1 = self.park.enter();
+        let g2 = context::Context::enter(self.handle());
+        (g1, g2)
     }
 }
 
@@ -81,6 +87,7 @@ where
 
 impl<P: park::Park> Drop for LocalExecutor<P> {
     fn drop(&mut self) {
+        let _g = self.enter();
         self.taskqueue.shutdown();
         self.park.shutdown();
     }

@@ -77,6 +77,7 @@ impl Handle {
     /// Returns a handle to the current driver.
     ///
     /// If the current thread is not in a driver context, this will panic.
+    #[track_caller]
     pub fn current() -> Self {
         context::DriverContext::handle().expect("not in driver context")
     }

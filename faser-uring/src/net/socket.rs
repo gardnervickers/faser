@@ -1,11 +1,11 @@
 //! Socket operations.
-use std::io::{self, IoSliceMut};
+use std::io::{self, IoSlice, IoSliceMut};
 use std::mem::{ManuallyDrop, MaybeUninit};
 use std::net::SocketAddr;
-use std::os::fd::{FromRawFd, IntoRawFd};
+use std::os::fd::FromRawFd;
 use std::pin::Pin;
 
-use bytes::{BufMut, BytesMut};
+use bytes::{Buf, BufMut};
 
 use io_uring::{opcode, types};
 use socket2::{Domain, Protocol, SockAddr, Type};
@@ -50,28 +50,29 @@ impl Socket {
         Ok(socket)
     }
 
-    pub(crate) async fn recv(&self, buf: BytesMut) -> io::Result<(usize, BytesMut)> {
-        let handle = crate::Handle::current();
-        let op = Recv::new(self.fd.clone(), buf);
-        let (len, buf) = handle.submit(op).await??;
-        Ok((len, buf))
-    }
-
-    pub(crate) async fn recv_from(
-        &self,
-        buf: BytesMut,
-    ) -> io::Result<((usize, SocketAddr), BytesMut)> {
+    pub(crate) async fn recv_from<B>(&self, buf: B) -> (io::Result<(usize, SocketAddr)>, B)
+    where
+        B: BufMut + 'static,
+    {
         let handle = crate::Handle::current();
         let op = RecvFrom::new(self.fd.clone(), buf);
-        let (len, buf) = handle.submit(op).await??;
-        Ok((len, buf))
+        handle.submit(op).await.unwrap()
     }
 
-    pub(crate) async fn local_addr(&self) -> io::Result<SocketAddr> {
+    pub(crate) async fn send_to<B>(&self, buf: B, addr: SocketAddr) -> (io::Result<(usize)>, B)
+    where
+        B: Buf + 'static,
+    {
+        let handle = crate::Handle::current();
+        let op = SendTo::new(self.fd.clone(), buf, Some(addr));
+        handle.submit(op).await.unwrap()
+    }
+
+    pub(crate) fn local_addr(&self) -> io::Result<SocketAddr> {
         Ok(self.as_socket().local_addr()?.as_socket().unwrap())
     }
 
-    pub(crate) async fn peer_addr(&self) -> io::Result<SocketAddr> {
+    pub(crate) fn peer_addr(&self) -> io::Result<SocketAddr> {
         Ok(self.as_socket().peer_addr()?.as_socket().unwrap())
     }
 
@@ -120,6 +121,86 @@ impl Singleshot for OpenSocket {
     }
 }
 
+struct SendTo<B> {
+    fd: FaserFd,
+    buf: B,
+    addr: Option<SockAddr>,
+    msghdr: MaybeUninit<libc::msghdr>,
+    slices: MaybeUninit<[IoSlice<'static>; 1]>,
+}
+
+impl<B> SendTo<B>
+where
+    B: Buf,
+{
+    pub(crate) fn new(fd: FaserFd, buf: B, addr: Option<SocketAddr>) -> Self {
+        let addr = addr.map(SockAddr::from);
+        Self {
+            fd,
+            buf,
+            addr,
+            msghdr: MaybeUninit::zeroed(),
+            slices: MaybeUninit::zeroed(),
+        }
+    }
+}
+
+impl<B> Operation for SendTo<B>
+where
+    B: Buf,
+{
+    fn configure(self: Pin<&mut Self>) -> io_uring::squeue::Entry {
+        let this = unsafe { self.get_unchecked_mut() };
+
+        // Initialize the slice.
+        let slice = IoSlice::new(unsafe {
+            std::slice::from_raw_parts(this.buf.chunk().as_ptr(), this.buf.chunk().len())
+        });
+        this.slices.write([slice]);
+
+        // Next we initialize the msghdr.
+        let msghdr = this.msghdr.as_mut_ptr();
+        unsafe {
+            (*msghdr).msg_iov = this.slices.as_mut_ptr() as *mut _;
+            (*msghdr).msg_iovlen = 1;
+        }
+
+        // Configure the address.
+        match &this.addr {
+            Some(addr) => unsafe {
+                (*msghdr).msg_name = addr.as_ptr() as *mut libc::c_void;
+                (*msghdr).msg_namelen = addr.len() as _;
+            },
+            None => unsafe {
+                (*msghdr).msg_name = std::ptr::null_mut();
+                (*msghdr).msg_namelen = 0;
+            },
+        };
+
+        let msghdr = this.msghdr.as_ptr();
+
+        // Finally we create the operation.
+        match this.fd.kind() {
+            crate::fd::FdKind::Fd(fd) => opcode::SendMsg::new(types::Fd(fd.0), msghdr),
+            crate::fd::FdKind::Fixed(fd) => opcode::SendMsg::new(types::Fixed(fd.0), msghdr),
+        }
+        .build()
+    }
+
+    fn cleanup(&mut self, _: crate::operation::CQEResult) {}
+}
+
+impl<B> Singleshot for SendTo<B>
+where
+    B: Buf,
+{
+    type Output = (io::Result<usize>, B);
+
+    fn complete(self, result: crate::operation::CQEResult) -> Self::Output {
+        (result.result.map(|v| v as usize), self.buf)
+    }
+}
+
 struct RecvFrom<B> {
     fd: FaserFd,
     buf: B,
@@ -139,8 +220,8 @@ where
             fd,
             buf,
             addr,
-            msghdr: MaybeUninit::uninit(),
-            slices: MaybeUninit::uninit(),
+            msghdr: MaybeUninit::zeroed(),
+            slices: MaybeUninit::zeroed(),
         }
     }
 }
@@ -185,84 +266,17 @@ impl<B> Singleshot for RecvFrom<B>
 where
     B: BufMut,
 {
-    type Output = io::Result<((usize, SocketAddr), B)>;
+    type Output = (io::Result<(usize, SocketAddr)>, B);
 
     fn complete(self, result: crate::operation::CQEResult) -> Self::Output {
-        let res = result.result? as usize;
-        let mut buf = self.buf;
-        let addr = self.addr.as_socket().unwrap();
-        unsafe { buf.advance_mut(res) };
-        Ok(((res, addr), buf))
-    }
-}
-
-struct Recv<B> {
-    fd: FaserFd,
-    buf: B,
-}
-
-impl<B> Recv<B> {
-    pub(crate) fn new(fd: FaserFd, buf: B) -> Self {
-        Self { fd, buf }
-    }
-}
-
-impl<B> Operation for Recv<B>
-where
-    B: BufMut,
-{
-    fn configure(self: Pin<&mut Self>) -> io_uring::squeue::Entry {
-        // Safety: we're not moving the buffer, so it's safe to get a pointer to it.
-        let this = unsafe { self.get_unchecked_mut() };
-        let chunk = this.buf.chunk_mut();
-        let buf = chunk.as_mut_ptr();
-        let len = chunk.len();
-        match this.fd.kind() {
-            crate::fd::FdKind::Fd(fd) => opcode::Recv::new(types::Fd(fd.0), buf, len as u32),
-            crate::fd::FdKind::Fixed(fd) => opcode::Recv::new(types::Fixed(fd.0), buf, len as u32),
+        match result.result {
+            Ok(bytes_read) => {
+                let addr = self.addr.as_socket().unwrap();
+                let mut buf = self.buf;
+                unsafe { buf.advance_mut(bytes_read as usize) };
+                (Ok((bytes_read as usize, addr)), buf)
+            }
+            Err(err) => (Err(err), self.buf),
         }
-        .build()
-    }
-
-    fn cleanup(&mut self, _: crate::operation::CQEResult) {}
-}
-
-impl<B> Singleshot for Recv<B>
-where
-    B: BufMut,
-{
-    type Output = io::Result<(usize, B)>;
-
-    fn complete(self, result: crate::operation::CQEResult) -> Self::Output {
-        let res = result.result?;
-
-        let mut buf = self.buf;
-
-        unsafe { buf.advance_mut(res as usize) };
-        Ok((res as usize, buf))
     }
 }
-
-// #[cfg(test)]
-// mod tests {
-//     use std::net::SocketAddrV4;
-
-//     use faser_executor::LocalExecutor;
-//     use io_uring::IoUring;
-
-//     use super::*;
-
-//     #[test]
-//     fn test_recv() -> Result<(), Box<dyn std::error::Error>> {
-//         let driver = crate::Driver::new(IoUring::builder(), 32)?;
-//         let mut ex = LocalExecutor::new(driver);
-
-//         ex.block_on(async {
-//             let socket = Socket::bind("0.0.0.0:5000".parse()?, Domain::IPV4, Type::DGRAM).await?;
-//             println!("{:?}", socket.local_addr().await?);
-//             let next = socket.recv_from(BytesMut::with_capacity(1024)).await?;
-//             println!("{next:?}");
-//             Ok(())
-//         })
-//     }
-// }

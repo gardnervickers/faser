@@ -29,6 +29,11 @@ pub(crate) trait Singleshot: Operation {
 
     /// Complete can be called multiple times in the case of a multi-shot operation.
     fn complete(self, result: CQEResult) -> Self::Output;
+
+    /// Called when a cqe with the more flag set is received.
+    fn update(&mut self, result: CQEResult) {
+        panic!("unhandled update called on a singleshot operation: {result:?}. Implement update.")
+    }
 }
 
 pub(crate) trait Multishot: Operation {
@@ -313,14 +318,19 @@ where
         if !self.inner.is_complete() {
             return None;
         }
-
-        let mut results = self.inner.take_completions();
-        if results.len() > 1 {
-            panic!("singleshot operation completed multiple times");
+        let results = self.inner.take_completions();
+        let mut data = unsafe { self.inner.try_take() }.expect("operation already completed");
+        let last_idx = results.len() - 1;
+        for (idx, result) in results.into_iter().enumerate() {
+            if idx == last_idx {
+                assert!(!result.more());
+                return Some(data.complete(result));
+            } else {
+                assert!(result.more());
+                data.update(result);
+            }
         }
-        let data = unsafe { self.inner.try_take() }.expect("operation already completed");
-        let result = results.remove(0);
-        Some(data.complete(result))
+        panic!("no final completion");
     }
 
     fn try_next(&mut self) -> Option<T::Item>
