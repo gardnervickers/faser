@@ -10,6 +10,7 @@ use std::pin::Pin;
 
 use bytes::{Buf, BufMut};
 
+use io_uring::squeue::Flags;
 use io_uring::{opcode, types};
 use socket2::{Domain, Protocol, SockAddr, Type};
 
@@ -339,6 +340,7 @@ impl Operation for RecvFromRing {
         }
         .buf_group(this.ring.bgid())
         .build()
+        .flags(Flags::BUFFER_SELECT)
     }
 
     fn cleanup(&mut self, res: crate::operation::CQEResult) {

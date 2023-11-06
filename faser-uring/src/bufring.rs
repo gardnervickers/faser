@@ -367,7 +367,6 @@ impl InnerBufRing {
         // This fn does the odd thing of having self as the BufRing and taking an argument that is
         // the same BufRing but wrapped in Rc<_> so the wrapped buf_ring can be passed to the
         // outgoing GBuf.
-
         let bid = io_uring::cqueue::buffer_select(flags).unwrap();
 
         let len = res as usize;
