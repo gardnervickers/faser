@@ -5,6 +5,7 @@ use std::net::SocketAddr;
 use bytes::{Buf, BufMut};
 use socket2::{Domain, Type};
 
+use crate::bufring::{BufRing, BufRingBuf};
 use crate::net::socket;
 
 /// A UDP socket.
@@ -51,7 +52,8 @@ impl UdpSocket {
         self.inner.send_to(buf, addr).await
     }
 
-    /// Receives a single datagram message on the socket. On success, returns the number of bytes read and the origin.
+    /// Receives a single datagram message on the socket. On success, returns the number
+    /// of bytes read and the origin.
     ///
     /// This must be called with a buf of sufficient size to hold the message. If a message
     /// is too long to fit in the supplied, buffer, excess bytes may be discarded.
@@ -60,5 +62,14 @@ impl UdpSocket {
         B: BufMut + 'static,
     {
         self.inner.recv_from(buf).await
+    }
+
+    /// Sends a single datagram message on the socket to the given address using a buffer
+    /// from the given ring.
+    ///
+    /// The buffer ring used must contain buffers of sufficient size to hold the message. If
+    /// a message is too long to fit in the supplied, buffer, excess bytes may be discarded.
+    pub async fn recv_from_ring(&self, ring: &BufRing) -> io::Result<(BufRingBuf, SocketAddr)> {
+        self.inner.recv_from_ring(ring).await
     }
 }

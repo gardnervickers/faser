@@ -1,5 +1,8 @@
 //! Socket operations.
-use std::io::{self, IoSlice, IoSliceMut};
+//!
+//! [Socket] is the core socket type
+//! used by both TCP and UDP sockets
+use std::io;
 use std::mem::{ManuallyDrop, MaybeUninit};
 use std::net::SocketAddr;
 use std::os::fd::FromRawFd;
@@ -10,6 +13,7 @@ use bytes::{Buf, BufMut};
 use io_uring::{opcode, types};
 use socket2::{Domain, Protocol, SockAddr, Type};
 
+use crate::bufring::{BufRing, BufRingBuf};
 use crate::fd::FaserFd;
 use crate::operation::{Operation, Singleshot};
 
@@ -48,6 +52,15 @@ impl Socket {
         socket.as_socket().set_nonblocking(true)?;
         socket.as_socket().bind(&addr)?;
         Ok(socket)
+    }
+
+    pub(crate) async fn recv_from_ring(
+        &self,
+        ring: &BufRing,
+    ) -> io::Result<(BufRingBuf, SocketAddr)> {
+        let handle = crate::Handle::current();
+        let op = RecvFromRing::new(self.fd.clone(), ring.clone());
+        handle.submit(op).await?
     }
 
     pub(crate) async fn recv_from<B>(&self, buf: B) -> (io::Result<(usize, SocketAddr)>, B)
@@ -126,7 +139,7 @@ struct SendTo<B> {
     buf: B,
     addr: Option<SockAddr>,
     msghdr: MaybeUninit<libc::msghdr>,
-    slices: MaybeUninit<[IoSlice<'static>; 1]>,
+    slices: MaybeUninit<[io::IoSlice<'static>; 1]>,
 }
 
 impl<B> SendTo<B>
@@ -154,7 +167,7 @@ where
 
         // Initialize the slice.
         {
-            let slice = IoSlice::new(unsafe {
+            let slice = io::IoSlice::new(unsafe {
                 std::slice::from_raw_parts(this.buf.chunk().as_ptr(), this.buf.chunk().len())
             });
             this.slices.write([slice]);
@@ -211,7 +224,7 @@ struct RecvFrom<B> {
     buf: B,
     addr: SockAddr,
     msghdr: MaybeUninit<libc::msghdr>,
-    slices: MaybeUninit<[IoSliceMut<'static>; 1]>,
+    slices: MaybeUninit<[io::IoSliceMut<'static>; 1]>,
 }
 
 impl<B> RecvFrom<B>
@@ -241,7 +254,7 @@ where
         let chunk = this.buf.chunk_mut();
         let chunk = unsafe { chunk.as_uninit_slice_mut() };
         // First we initialize the IoVecMut slice.
-        this.slices.write([IoSliceMut::new(unsafe {
+        this.slices.write([io::IoSliceMut::new(unsafe {
             &mut *(chunk as *mut [MaybeUninit<u8>] as *mut [u8])
         })]);
         // Safety: We just initialized the slice.
@@ -283,5 +296,65 @@ where
             }
             Err(err) => (Err(err), self.buf),
         }
+    }
+}
+
+struct RecvFromRing {
+    fd: FaserFd,
+    ring: BufRing,
+    addr: SockAddr,
+    msghdr: MaybeUninit<libc::msghdr>,
+}
+
+impl RecvFromRing {
+    pub(crate) fn new(fd: FaserFd, ring: BufRing) -> Self {
+        // Safety: We won't read from the socket addr until it's initialized.
+        let addr = unsafe { SockAddr::try_init(|_, _| Ok(())) }.unwrap().1;
+        Self {
+            fd,
+            ring,
+            addr,
+            msghdr: MaybeUninit::zeroed(),
+        }
+    }
+}
+
+impl Operation for RecvFromRing {
+    fn configure(self: Pin<&mut Self>) -> io_uring::squeue::Entry {
+        let this = unsafe { self.get_unchecked_mut() };
+
+        // Next we initialize the msghdr.
+        let msghdr = this.msghdr.as_mut_ptr();
+        unsafe {
+            (*msghdr).msg_iov = std::ptr::null_mut();
+            (*msghdr).msg_iovlen = 0;
+            (*msghdr).msg_name = this.addr.as_ptr() as *mut libc::c_void;
+            (*msghdr).msg_namelen = this.addr.len() as _;
+        }
+
+        // Finally we create the operation.
+        match this.fd.kind() {
+            crate::fd::FdKind::Fd(fd) => opcode::RecvMsg::new(types::Fd(fd.0), msghdr),
+            crate::fd::FdKind::Fixed(fd) => opcode::RecvMsg::new(types::Fixed(fd.0), msghdr),
+        }
+        .buf_group(this.ring.bgid())
+        .build()
+    }
+
+    fn cleanup(&mut self, res: crate::operation::CQEResult) {
+        if let Ok(n) = res.result {
+            drop(self.ring.get_buf(n, res.flags));
+        }
+    }
+}
+
+impl Singleshot for RecvFromRing {
+    type Output = io::Result<(BufRingBuf, SocketAddr)>;
+
+    fn complete(self, result: crate::operation::CQEResult) -> Self::Output {
+        let n = result.result?;
+        let buf = self.ring.get_buf(n, result.flags)?;
+        let addr = self.addr.as_socket().unwrap();
+        Ok((buf, addr))
     }
 }

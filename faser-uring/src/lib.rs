@@ -16,8 +16,8 @@ pub(crate) mod fd;
 pub(crate) mod operation;
 pub(crate) mod util;
 
+pub mod bufring;
 pub mod net;
 
 pub use driver::{Driver, Handle};
-
 pub use util::noop;

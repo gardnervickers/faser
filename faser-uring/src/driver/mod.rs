@@ -6,7 +6,7 @@ use std::{io, mem};
 use faser_executor::park::{Park, ParkMode};
 use io_uring::squeue::{Flags, PushError};
 use io_uring::types::{self, CancelBuilder, SubmitArgs, Timespec};
-use io_uring::{cqueue, opcode, IoUring};
+use io_uring::{cqueue, opcode, IoUring, Submitter};
 use log::{debug, error, trace, warn};
 
 use crate::fd;
@@ -109,6 +109,10 @@ impl Handle {
 
     pub(crate) fn close_fd(&self, kind: &fd::FdKind) -> io::Result<()> {
         self.shared.close_fd(kind)
+    }
+
+    pub(crate) fn with_submitter<U>(&self, f: impl FnOnce(&Submitter<'_>) -> U) -> U {
+        self.shared.with_submitter(f)
     }
 }
 
@@ -388,6 +392,12 @@ impl Shared {
             )
         })?;
         Ok(())
+    }
+
+    fn with_submitter<U>(&self, f: impl FnOnce(&Submitter<'_>) -> U) -> U {
+        let ring = self.ring.borrow();
+        let sq = ring.submitter();
+        f(&sq)
     }
 
     /// Submit all entries in the submission queue.
