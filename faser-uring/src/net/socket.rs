@@ -49,9 +49,10 @@ impl Socket {
     ) -> io::Result<Self> {
         let addr = SockAddr::from(addr);
         let socket = Self::open(domain, socket_type, None).await?;
-        socket.as_socket().set_reuse_address(true)?;
-        socket.as_socket().set_nonblocking(true)?;
-        socket.as_socket().bind(&addr)?;
+        let s = socket.as_socket();
+        s.set_reuse_address(true)?;
+        s.set_nonblocking(true)?;
+        s.bind(&addr)?;
         Ok(socket)
     }
 
