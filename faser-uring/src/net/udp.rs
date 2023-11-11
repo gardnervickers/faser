@@ -72,4 +72,11 @@ impl UdpSocket {
     pub async fn recv_from_ring(&self, ring: &BufRing) -> io::Result<(BufRingBuf, SocketAddr)> {
         self.inner.recv_from_ring(ring).await
     }
+
+    /// Close the socket.
+    ///
+    /// This will wait for all pending operations to complete before closing the socket.
+    pub async fn close(self) -> io::Result<()> {
+        self.inner.close().await
+    }
 }

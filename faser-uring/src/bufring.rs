@@ -430,7 +430,7 @@ impl InnerBufRing {
 impl Drop for InnerBufRing {
     fn drop(&mut self) {
         let handle = Handle::current();
-        handle.with_submitter(|s| self.unregister(s)).unwrap();
+        handle.with_submitter(|s| self.unregister(s).unwrap());
     }
 }
 

@@ -15,11 +15,8 @@ unlikely that this is generally true for others.
 
 ## Why use Faser over X?
 
-Faser is **not** a general purpose asynchronous runtime. It is designed for
-a narrow subset of applications.
-
-The general idea is that by being restrictive with what we support, Faser can
-in theory be fast and predictable but that is yet to be seen.
+You probably should not. Faser is not a general purpose runtime. It's meant
+for very specific workloads (sharded I/O bound storage systems).
 
 ## Status of the Project
 

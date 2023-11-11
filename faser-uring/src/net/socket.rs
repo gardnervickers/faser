@@ -100,6 +100,10 @@ impl Socket {
             crate::fd::FdKind::Fixed(_) => unimplemented!(),
         }
     }
+
+    pub(crate) async fn close(self) -> io::Result<()> {
+        self.fd.close().await
+    }
 }
 
 struct OpenSocket {
