@@ -1,9 +1,12 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell, UnsafeCell};
 use std::future::Future;
+use std::marker::PhantomPinned;
 use std::pin::Pin;
+use std::ptr::{self, NonNull};
 use std::task::{Context, Poll, Waker};
 
-use pin_list::PinList;
+use cordyceps::{list, Linked, List};
+use pin_project_lite::pin_project;
 
 /// [`Notify`] is a notification mechanism for tasks.
 ///
@@ -13,13 +16,14 @@ use pin_list::PinList;
 /// If a [`Notified`] is dropped before its future completes, it
 /// will pass the wakeup to the next [`Notified`] in the queue.
 pub(crate) struct Notify {
-    inner: RefCell<Inner>,
+    waiters: RefCell<List<Entry>>,
+    count: Cell<usize>,
 }
 
 impl std::fmt::Debug for Notify {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Notify")
-            .field("waiters", &self.inner.borrow().num_waiters)
+            .field("waiters", &self.count.get())
             .finish()
     }
 }
@@ -27,102 +31,91 @@ impl std::fmt::Debug for Notify {
 impl Default for Notify {
     fn default() -> Self {
         Self {
-            inner: RefCell::new(Inner {
-                // Safety: We don't need any checking for the waiters list because
-                //         we always use the same list for Notified instances.
-                waiters: PinList::new(unsafe { pin_list::id::Unchecked::new() }),
-                num_waiters: 0,
-            }),
+            waiters: RefCell::new(List::new()),
+            count: Cell::new(0),
         }
     }
 }
 
 impl Notify {
     /// Returns a [`Notified`] which can be used to wait on this [`Notify`].
+    ///
+    /// Tasks waiting on a [`Notified`] will be woken when [`Notify::notify`]
+    /// is called. Calling [`Notify::notify(n)`] guarantees that n tasks will
+    /// both be woken up and complete their wait.
+    ///
+    /// If a woken Notified instance is dropped, it's notification will be
+    /// passed on to the next Notified in the queue.
     pub(crate) fn wait(&self) -> Notified<'_> {
         Notified {
             notify: self,
-            node: pin_list::Node::new(),
+            entry: Entry::new(),
         }
     }
 
     /// Returns the number of waiters on this [`Notify`].
     pub(crate) fn waiters(&self) -> usize {
-        self.inner.borrow().num_waiters
+        self.count.get()
     }
 
     /// Notify the next `n` waiters.
+    ///
+    /// This will return the number of waiters notified. If there are
+    /// fewer waiters than `n`, then the number of waiters notified will
+    /// be equal to the number of waiters.
     pub(crate) fn notify(&self, n: usize) -> usize {
         let mut removed = 0;
-
         while removed != n {
-            let mut inner = self.inner.borrow_mut();
-            if let Ok(waker) = inner.waiters.cursor_front_mut().remove_current(()) {
-                inner.num_waiters -= 1;
-                drop(inner);
-                waker.wake();
+            let mut waiters = self.waiters.borrow_mut();
+
+            if let Some(entry) = waiters.pop_front() {
+                let entry = unsafe { entry.as_ref() };
+                entry.fire();
                 removed += 1;
             } else {
                 break;
             }
         }
+        self.count.set(self.count.get() - removed);
         removed
     }
+
+    /// Cancel a dropped Notified.
+    ///
+    /// This will only be called if the Notified is
+    /// dropped while still being linked.
+    unsafe fn cancel(&self, entry: Pin<&mut Entry>) {
+        self.count.set(self.count.get() - 1);
+        let ptr = unsafe {
+            let entry = Pin::into_inner_unchecked(entry);
+            ptr::NonNull::from(entry)
+        };
+        let mut waiters = self.waiters.borrow_mut();
+        waiters.remove(ptr);
+    }
 }
 
-struct Inner {
-    waiters: PinList<PLTypes>,
-    num_waiters: usize,
-}
-
-struct PLTypes;
-impl pin_list::Types for PLTypes {
-    type Id = pin_list::id::Unchecked;
-
-    type Protected = Waker;
-
-    type Removed = ();
-
-    type Unprotected = ();
-}
-
-pin_project_lite::pin_project! {
-    #[must_use = "futures do nothing unless you `.await` or poll them"]
-    pub struct Notified<'notify> {
-        notify: &'notify Notify,
+pin_project! {
+    pub(crate) struct Notified<'n> {
+        notify: &'n Notify,
         #[pin]
-        node: pin_list::Node<PLTypes>,
+        entry: Entry,
+
     }
 
-    impl PinnedDrop for Notified<'_> {
-        fn drop(this: Pin<&mut Self>) {
-            let this = this.project();
-            // First, check if the node has been initialized. Initialization
-            // happens only if the node has been linked into the list. Nodes
-            // which are removed are also initialized, but they are not linked.
-            //
-            // If a node was never initialized, then there is nothing to do.
-            let node = match this.node.initialized_mut() {
-                Some(initialized) => initialized,
-                None => return,
-            };
-            // The node has been initialized, so we need to move it back
-            // to the uninitialized state, which may unlink.
-            let mut inner = this.notify.inner.borrow_mut();
-            match node.reset(&mut inner.waiters) {
-                (pin_list::NodeData::Linked(_waker), ()) => {
-                    // The node was linked, so there is nothing left to do.
-                    inner.num_waiters -= 1;
-                }
-                (pin_list::NodeData::Removed(()), ()) => {
-                    // The node was not linked, which means it was notified,
-                    // so pass the notification on to the next waiter.
-                    if let Ok(waker) = inner.waiters.cursor_front_mut().remove_current(()) {
-                        inner.num_waiters -= 1;
-                        drop(inner);
-                        waker.wake();
-                    }
-                }
+    impl<'n> PinnedDrop for Notified<'n> {
+        fn drop(mut this: Pin<&mut Self>) {
+            let me = this.project();
+            let state = me.entry.state.get();
+            if matches!(state, State::Linked) {
+                // Safety: we know that the notified is linked.
+                unsafe { me.notify.cancel(me.entry) };
+                return;
+            }
+            if matches!(state, State::Fired) {
+                // If this was fired, pass the notification
+                // on to the next waiter.
+                me.notify.notify(1);
             }
         }
     }
@@ -133,25 +126,84 @@ impl<'notify> Future for Notified<'notify> {
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut this = self.project();
-        let mut inner = this.notify.inner.borrow_mut();
-        if let Some(node) = this.node.as_mut().initialized_mut() {
-            match node.take_removed(&inner.waiters) {
-                Err(node) => {
-                    // We have not been woken up, register the waker.
-                    *node.protected_mut(&mut inner.waiters).unwrap() = cx.waker().clone();
-                    Poll::Pending
-                }
-                Ok(((), ())) => {
-                    // The node has been removed from the list, so we can return ready.
-                    Poll::Ready(())
-                }
+        let entry = this.entry.as_mut();
+        match entry.state.get() {
+            State::Unregistered => {
+                entry.state.set(State::Linked);
+                entry.waker.borrow_mut().replace(cx.waker().clone());
+                let ptr = unsafe {
+                    let entry = Pin::into_inner_unchecked(entry);
+                    ptr::NonNull::from(entry)
+                };
+                this.notify.waiters.borrow_mut().push_back(ptr);
+                this.notify.count.set(this.notify.count.get() + 1);
+                Poll::Pending
             }
-        } else {
-            // The node has not been initialized, so we need to initialize it.
-            inner.waiters.push_back(this.node, cx.waker().clone(), ());
-            inner.num_waiters += 1;
-            Poll::Pending
+            State::Linked => {
+                entry.waker.borrow_mut().replace(cx.waker().clone());
+                Poll::Pending
+            }
+            State::Fired => {
+                entry.state.set(State::Completed);
+                Poll::Ready(())
+            }
+            State::Completed => unreachable!(),
         }
+    }
+}
+
+pin_project! {
+    struct Entry {
+        #[pin]
+        links: UnsafeCell<list::Links<Entry>>,
+        state: Cell<State>,
+        waker: RefCell<Option<Waker>>,
+        _pin: PhantomPinned
+    }
+}
+
+#[derive(Clone, Copy)]
+enum State {
+    Unregistered,
+    Linked,
+    Fired,
+    Completed,
+}
+
+impl Entry {
+    fn new() -> Self {
+        Self {
+            links: UnsafeCell::new(list::Links::new()),
+            state: Cell::new(State::Unregistered),
+            waker: RefCell::new(None),
+            _pin: PhantomPinned,
+        }
+    }
+
+    fn fire(&self) {
+        if let Some(waker) = self.waker.borrow_mut().take() {
+            waker.wake();
+        }
+        self.state.set(State::Fired)
+    }
+}
+
+unsafe impl Linked<list::Links<Entry>> for Entry {
+    type Handle = NonNull<Entry>;
+
+    fn into_ptr(r: Self::Handle) -> NonNull<Self> {
+        r
+    }
+
+    unsafe fn from_ptr(ptr: NonNull<Self>) -> Self::Handle {
+        ptr
+    }
+
+    unsafe fn links(target: NonNull<Self>) -> NonNull<list::Links<Entry>> {
+        // Safety: addr_of avoids the need to create a temporary reference.
+        let links = ptr::addr_of!((*target.as_ptr()).links);
+        // Safety: target is nonnull, so the reference to it's pointers are also nonnull.
+        unsafe { NonNull::new_unchecked((*links).get()) }
     }
 }
 
