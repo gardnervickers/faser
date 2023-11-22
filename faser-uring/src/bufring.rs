@@ -5,12 +5,13 @@
 
 use std::cell::Cell;
 use std::rc::Rc;
-use std::sync::atomic::{self, AtomicU16};
-use std::{fmt, io, ops, ptr};
+use std::sync::atomic::{AtomicU16, Ordering};
+use std::{fmt, io, ops};
 
 use io_uring::types::{self, BufRingEntry};
 use io_uring::Submitter;
 
+use crate::util::mmap::AnonymousMmap;
 use crate::Handle;
 
 /// [`BufRing`] is a reference counted buffer ring which can be registered
@@ -278,7 +279,7 @@ impl InnerBufRing {
         };
 
         let shared_tail =
-            unsafe { types::BufRingEntry::tail(ring_start.as_ptr() as *const BufRingEntry) }
+            unsafe { types::BufRingEntry::tail(ring_start.as_ptr_mut() as *const BufRingEntry) }
                 as *const AtomicU16;
 
         let ring_entries_mask = ring_entries - 1;
@@ -422,7 +423,7 @@ impl InnerBufRing {
     // called to fill in new buffers.
     fn buf_ring_sync(&self) {
         unsafe {
-            (*self.shared_tail).store(self.local_tail.get(), atomic::Ordering::Release);
+            (*self.shared_tail).store(self.local_tail.get(), Ordering::Release);
         }
     }
 }
@@ -431,59 +432,6 @@ impl Drop for InnerBufRing {
     fn drop(&mut self) {
         let handle = Handle::current();
         handle.with_submitter(|s| self.unregister(s).unwrap());
-    }
-}
-
-/// An anonymous region of memory mapped using `mmap(2)`, not backed by a file
-/// but that is guaranteed to be page-aligned and zero-filled.
-struct AnonymousMmap {
-    addr: ptr::NonNull<libc::c_void>,
-    len: usize,
-}
-
-impl AnonymousMmap {
-    /// Creates a new anonymous mapping of `len` bytes.
-    fn new(len: usize) -> io::Result<Self> {
-        let addr = unsafe {
-            match libc::mmap(
-                ptr::null_mut(),
-                len,
-                libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_ANONYMOUS | libc::MAP_PRIVATE | libc::MAP_POPULATE,
-                0,
-                0,
-            ) {
-                libc::MAP_FAILED => return Err(io::Error::last_os_error()),
-                addr => ptr::NonNull::new_unchecked(addr),
-            }
-        };
-        match unsafe { libc::madvise(addr.as_ptr(), len, libc::MADV_DONTFORK) } {
-            0 => {
-                let mmap = Self { addr, len };
-                Ok(mmap)
-            }
-            _ => Err(io::Error::last_os_error()),
-        }
-    }
-
-    /// Get a pointer to the memory.
-    #[inline]
-    fn as_ptr(&self) -> *const libc::c_void {
-        self.addr.as_ptr()
-    }
-
-    /// Get a mut pointer to the memory.
-    #[inline]
-    fn as_ptr_mut(&self) -> *mut libc::c_void {
-        self.addr.as_ptr()
-    }
-}
-
-impl Drop for AnonymousMmap {
-    fn drop(&mut self) {
-        unsafe {
-            libc::munmap(self.addr.as_ptr(), self.len);
-        }
     }
 }
 

@@ -1,6 +1,7 @@
 use std::io;
 use std::pin::Pin;
 
+pub(crate) mod mmap;
 pub(crate) mod notify;
 
 /// A no-op operation, useful for testing.
