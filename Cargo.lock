@@ -24,6 +24,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7dfdb4953a096c551ce9ace855a604d702e6e62d77fac690575ae347571717f5"
 
 [[package]]
+name = "benches"
+version = "0.1.0"
+dependencies = [
+ "bencher",
+ "futures",
+ "io-uring",
+ "norn-executor",
+ "norn-task",
+ "norn-uring",
+]
+
+[[package]]
 name = "bit-set"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -352,7 +364,6 @@ dependencies = [
 name = "norn-task"
 version = "0.1.0"
 dependencies = [
- "bencher",
  "bitflags 2.4.1",
  "cordyceps",
  "futures",
@@ -374,7 +385,6 @@ dependencies = [
 name = "norn-uring"
 version = "0.1.0"
 dependencies = [
- "bencher",
  "bytes",
  "cordyceps",
  "env_logger",

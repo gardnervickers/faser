@@ -1,3 +1,10 @@
 [workspace]
 resolver = "2"
-members = [ "norn-executor", "norn-task" , "norn-timer", "norn-uring"]
+members = [ "benches", "norn-executor", "norn-task" , "norn-timer", "norn-uring"]
+
+[profile.bench]
+opt-level = 3
+debug = false
+lto = true
+codegen-units = 1
+panic = "abort"

@@ -1,0 +1,27 @@
+[package]
+name = "benches"
+version = "0.1.0"
+publish = false
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+norn-task = { path = "../norn-task" }
+norn-uring = { path = "../norn-uring" }
+norn-executor = { path = "../norn-executor" }
+io-uring = "0.6"
+
+[dev-dependencies]
+bencher = "0.1.5"
+futures = "0.3.29"
+
+[[bench]]
+name = "schedule_task"
+path = "schedule_task.rs"
+harness = false
+
+[[bench]]
+name = "noop_submit"
+path = "noop_submit.rs"
+harness = false

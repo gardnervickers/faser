@@ -4,7 +4,7 @@ use std::borrow::Cow;
 use std::cmp;
 
 use bencher::{run_tests_console, Bencher, TestDesc, TestDescAndFn, TestFn, TestOpts};
-use norn_executor::{self, spawn};
+use norn_executor::spawn;
 use norn_uring::noop;
 
 struct NoopBench(usize, usize);
@@ -17,9 +17,9 @@ impl NoopBench {
 
 impl bencher::TDynBenchFn for NoopBench {
     fn run(&self, b: &mut Bencher) {
+        let ring = norn_uring::Driver::new(io_uring::IoUring::builder(), 32).unwrap();
+        let mut executor = norn_executor::LocalExecutor::new(ring);
         b.iter(|| {
-            let ring = norn_uring::Driver::new(io_uring::IoUring::builder(), 32).unwrap();
-            let mut executor = norn_executor::LocalExecutor::new(ring);
             let tasks = self.0;
             let n = self.1;
 
