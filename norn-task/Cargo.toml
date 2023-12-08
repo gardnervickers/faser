@@ -1,0 +1,16 @@
+[package]
+name = "norn-task"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bitflags = "2.4.1"
+cordyceps = "0.3.2"
+
+[dev-dependencies]
+bencher = "0.1.5"
+futures = "0.3.29"
+
+[[bench]]
+name = "schedule"
+harness = false
