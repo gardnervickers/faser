@@ -15,6 +15,8 @@ use crate::driver::PushFuture;
 
 pub(crate) trait Operation {
     /// Configure a new [`io_uring::squeue::Entry`] for this operation.
+    ///
+    /// Self will be pinned for the duration of the operation.
     fn configure(self: Pin<&mut Self>) -> io_uring::squeue::Entry;
 
     /// Called (potentially multiple) times when the operation is dropped by the application.

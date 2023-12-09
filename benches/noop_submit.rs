@@ -43,7 +43,6 @@ impl bencher::TDynBenchFn for NoopBench {
 
 pub fn benches() -> ::std::vec::Vec<TestDescAndFn> {
     let mut benches = vec![];
-
     for num_tasks in [1, 32, 64] {
         for n in [1, 100_000] {
             let per_task = cmp::max(n / num_tasks, 1);
