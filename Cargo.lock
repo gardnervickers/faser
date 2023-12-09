@@ -32,6 +32,7 @@ dependencies = [
  "io-uring",
  "norn-executor",
  "norn-task",
+ "norn-timer",
  "norn-uring",
 ]
 

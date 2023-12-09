@@ -54,7 +54,6 @@ impl Park for FastPark {
     type Guard = ();
 
     fn park(&mut self, mode: ParkMode) -> Result<(), std::io::Error> {
-        println!("park({:?})", mode);
         match mode {
             ParkMode::NoPark => Ok(()),
             ParkMode::NextCompletion => unimplemented!(),

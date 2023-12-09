@@ -10,6 +10,7 @@ edition = "2021"
 norn-task = { path = "../norn-task" }
 norn-uring = { path = "../norn-uring" }
 norn-executor = { path = "../norn-executor" }
+norn-timer = { path = "../norn-timer" }
 io-uring = "0.6"
 
 [dev-dependencies]
@@ -24,4 +25,9 @@ harness = false
 [[bench]]
 name = "noop_submit"
 path = "noop_submit.rs"
+harness = false
+
+[[bench]]
+name = "timers"
+path = "timers.rs"
 harness = false

@@ -19,7 +19,7 @@ use std::rc::Rc;
 use std::task::Context;
 use std::time::Duration;
 
-use clock::Clock;
+pub use clock::Clock;
 use norn_executor::park::{Park, ParkMode};
 
 mod clock;

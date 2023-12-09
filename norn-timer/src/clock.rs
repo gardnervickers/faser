@@ -2,6 +2,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+/// A clock for tracking time.
 #[derive(Debug, Clone)]
 pub struct Clock {
     start: Instant,
@@ -9,6 +10,9 @@ pub struct Clock {
 }
 
 impl Clock {
+    /// Create a new system clock.
+    ///
+    /// The system clock will start with the current system time.
     pub fn system() -> Self {
         Self {
             start: Instant::now(),
@@ -16,6 +20,10 @@ impl Clock {
         }
     }
 
+    /// Create a new simulated clock.
+    ///
+    /// The simulated clock will start with frozen time.
+    /// Time can be advanced by calling [`Clock::advance`].
     pub fn simulated() -> Self {
         Self {
             start: Instant::now(),
