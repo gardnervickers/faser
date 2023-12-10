@@ -10,9 +10,6 @@ Norn is designed for applications which meet two criteria:
 1. Fundementally I/O bound
 2. Trivially shardable or non-parallizable.
 
-Most of the applications that I write happen to meet these criteria. It is
-unlikely that this is generally true for others.
-
 ## Why use Norn over X?
 
 You probably should not. Norn is not a general purpose runtime. It's meant
