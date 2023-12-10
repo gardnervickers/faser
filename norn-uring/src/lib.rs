@@ -16,6 +16,7 @@ pub(crate) mod fd;
 pub(crate) mod operation;
 pub(crate) mod util;
 
+pub mod buf;
 pub mod bufring;
 pub mod fs;
 pub mod net;

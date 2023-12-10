@@ -2,16 +2,18 @@ use std::io;
 use std::path::Path;
 use std::pin::Pin;
 
-use bytes::BufMut;
-use io_uring::{opcode, squeue, types};
+use io_uring::types::FsyncFlags;
+use io_uring::{opcode, types};
 
-use crate::fd::NornFd;
+use crate::buf::{StableBuf, StableBufMut};
+use crate::fd::{FdKind, NornFd};
 use crate::fs::opts;
-use crate::operation::{CQEResult, Op, Operation, Singleshot};
+use crate::operation::{CQEResult, Operation, Singleshot};
 
 /// A reference to an open file on the filesystem.
 pub struct File {
     fd: NornFd,
+    handle: crate::Handle,
 }
 
 impl std::fmt::Debug for File {
@@ -31,8 +33,8 @@ impl File {
         let creation_mode = opts.get_creation_mode()?;
         let open = Open::new(path.as_ref(), access_mode, creation_mode)?;
         let handle = crate::Handle::current();
-        let fd = Op::new(open, handle).await??;
-        Ok(Self { fd })
+        let fd = handle.submit(open).await??;
+        Ok(Self { fd, handle })
     }
 
     /// Open a file in read-only mode at the provided path.
@@ -44,6 +46,82 @@ impl File {
     /// Returns a new [`OpenOptions`] object which can be used to open a file.
     pub fn with_options() -> opts::OpenOptions {
         opts::OpenOptions::new()
+    }
+
+    /// Read bytes from the file into the specified buffer.
+    ///
+    /// The read will start at the provided offset.
+    pub async fn read_at<B>(&self, buf: B, offset: u64) -> (io::Result<usize>, B)
+    where
+        B: StableBufMut + 'static,
+    {
+        let read = ReadAt::new(self.fd.clone(), buf, offset);
+        self.handle.submit(read).await.unwrap()
+    }
+
+    /// Write the specified buffer to the file.
+    ///
+    /// The write will start at the provided offset.
+    pub async fn write_at<B>(&self, buf: B, offset: u64) -> (io::Result<usize>, B)
+    where
+        B: StableBuf + 'static,
+    {
+        let write = WriteAt::new(self.fd.clone(), buf, offset);
+        self.handle.submit(write).await.unwrap()
+    }
+
+    /// Sync the file and metadata to disk.
+    pub async fn sync(&self) -> io::Result<()> {
+        let flags = FsyncFlags::empty();
+        let sync = Sync::new(self.fd.clone(), flags);
+        self.handle.submit(sync).await.unwrap()
+    }
+
+    /// Sync only the data in the file to disk.
+    pub async fn datasync(&self) -> io::Result<()> {
+        let flags = FsyncFlags::DATASYNC;
+        let sync = Sync::new(self.fd.clone(), flags);
+        self.handle.submit(sync).await.unwrap()
+    }
+
+    /// Sync a range of the file.
+    pub async fn sync_range(&self, offset: u64, len: u32, flags: u32) -> io::Result<()> {
+        let sync = SyncRange::new(self.fd.clone(), offset, len, flags);
+        self.handle.submit(sync).await.unwrap()
+    }
+
+    /// Call `fallocate` on the file.
+    pub async fn fallocate(&self, offset: u64, len: u64, mode: i32) -> io::Result<()> {
+        let fallocate = Fallocate::new(self.fd.clone(), offset, len, mode);
+        self.handle.submit(fallocate).await.unwrap()
+    }
+    /// Allocate additional space in the file without changing the file length metadata.
+    ///
+    /// This is akin to fallocate with `FALLOC_FL_ZERO_RANGE` and `FALLOC_FL_KEEP_SIZE` set.
+    pub async fn allocate(&self, offset: u64, len: u64) -> io::Result<()> {
+        self.fallocate(
+            offset,
+            len,
+            libc::FALLOC_FL_ZERO_RANGE | libc::FALLOC_FL_KEEP_SIZE,
+        )
+        .await
+    }
+    /// Punches a hole in the file at the specified offset range.
+    ///
+    /// This can be used to discard portions of a file to save space. The file size will not be
+    /// changed.
+    pub async fn discard(&self, offset: u64, len: u64) -> io::Result<()> {
+        self.fallocate(
+            offset,
+            len,
+            libc::FALLOC_FL_PUNCH_HOLE | libc::FALLOC_FL_KEEP_SIZE,
+        )
+        .await
+    }
+
+    /// Close the file.
+    pub async fn close(self) -> io::Result<()> {
+        self.fd.close().await
     }
 }
 
@@ -92,31 +170,211 @@ impl Singleshot for Open {
     }
 }
 
+#[derive(Debug)]
 struct ReadAt<B> {
     fd: NornFd,
     buf: B,
     offset: u64,
 }
 
+impl<B> ReadAt<B> {
+    fn new(fd: NornFd, buf: B, offset: u64) -> Self {
+        Self { fd, buf, offset }
+    }
+}
+
 impl<B> Operation for ReadAt<B>
 where
-    B: BufMut,
+    B: StableBufMut,
 {
     fn configure(mut self: Pin<&mut Self>) -> io_uring::squeue::Entry {
-        let this = unsafe { self.get_unchecked_mut() };
-        let ptr = this.buf.
-
-        match this.fd.kind() {
-            crate::fd::FdKind::Fd(fd) => {
-                opcode::Read::new(*fd);
-            }
-            crate::fd::FdKind::Fixed(_) => todo!(),
+        let buf = self.buf.stable_ptr_mut();
+        let len = self.buf.bytes_remaining();
+        match self.fd.kind() {
+            FdKind::Fd(fd) => opcode::Read::new(*fd, buf, len as _),
+            FdKind::Fixed(fd) => opcode::Read::new(*fd, buf, len as _),
         }
-
-        todo!()
+        .offset(self.offset)
+        .build()
     }
 
-    fn cleanup(&mut self, result: CQEResult) {
-        todo!()
+    fn cleanup(&mut self, _: CQEResult) {}
+}
+
+impl<B> Singleshot for ReadAt<B>
+where
+    B: StableBufMut,
+{
+    type Output = (io::Result<usize>, B);
+
+    fn complete(mut self, result: CQEResult) -> Self::Output {
+        match result.result {
+            Ok(n) => {
+                let n = n as usize;
+                unsafe {
+                    self.buf.set_init(n);
+                }
+                (Ok(n), self.buf)
+            }
+            Err(err) => {
+                let buf = self.buf;
+                (Err(err), buf)
+            }
+        }
+    }
+}
+
+struct WriteAt<B> {
+    fd: NornFd,
+    buf: B,
+    offset: u64,
+}
+
+impl<B> WriteAt<B> {
+    fn new(fd: NornFd, buf: B, offset: u64) -> Self {
+        Self { fd, buf, offset }
+    }
+}
+
+impl<B> Operation for WriteAt<B>
+where
+    B: StableBuf,
+{
+    fn configure(self: Pin<&mut Self>) -> io_uring::squeue::Entry {
+        let buf = self.buf.stable_ptr();
+        let len = self.buf.bytes_init();
+        match self.fd.kind() {
+            FdKind::Fd(fd) => opcode::Write::new(*fd, buf, len as _),
+            FdKind::Fixed(fd) => opcode::Write::new(*fd, buf, len as _),
+        }
+        .offset(self.offset)
+        .build()
+    }
+
+    fn cleanup(&mut self, _: CQEResult) {}
+}
+
+impl<B> Singleshot for WriteAt<B>
+where
+    B: StableBuf,
+{
+    type Output = (io::Result<usize>, B);
+
+    fn complete(self, result: CQEResult) -> Self::Output {
+        match result.result {
+            Ok(n) => (Ok(n as usize), self.buf),
+            Err(err) => (Err(err), self.buf),
+        }
+    }
+}
+
+struct Sync {
+    fd: NornFd,
+    flags: FsyncFlags,
+}
+
+impl Sync {
+    fn new(fd: NornFd, flags: FsyncFlags) -> Self {
+        Self { fd, flags }
+    }
+}
+
+impl Operation for Sync {
+    fn configure(self: Pin<&mut Self>) -> io_uring::squeue::Entry {
+        match self.fd.kind() {
+            FdKind::Fd(fd) => opcode::Fsync::new(*fd),
+            FdKind::Fixed(fd) => opcode::Fsync::new(*fd),
+        }
+        .flags(self.flags)
+        .build()
+    }
+
+    fn cleanup(&mut self, _: CQEResult) {}
+}
+
+impl Singleshot for Sync {
+    type Output = io::Result<()>;
+
+    fn complete(self, result: CQEResult) -> Self::Output {
+        result.result.map(|_| ())
+    }
+}
+struct SyncRange {
+    fd: NornFd,
+    offset: u64,
+    len: u32,
+    flags: u32,
+}
+
+impl SyncRange {
+    fn new(fd: NornFd, offset: u64, len: u32, flags: u32) -> Self {
+        Self {
+            fd,
+            offset,
+            len,
+            flags,
+        }
+    }
+}
+
+impl Operation for SyncRange {
+    fn configure(self: Pin<&mut Self>) -> io_uring::squeue::Entry {
+        match self.fd.kind() {
+            FdKind::Fd(fd) => opcode::SyncFileRange::new(*fd, self.len),
+            FdKind::Fixed(fd) => opcode::SyncFileRange::new(*fd, self.len),
+        }
+        .offset(self.offset)
+        .flags(self.flags)
+        .build()
+    }
+
+    fn cleanup(&mut self, _: CQEResult) {}
+}
+
+impl Singleshot for SyncRange {
+    type Output = io::Result<()>;
+
+    fn complete(self, result: CQEResult) -> Self::Output {
+        result.result.map(|_| ())
+    }
+}
+
+struct Fallocate {
+    fd: NornFd,
+    offset: u64,
+    len: u64,
+    mode: i32,
+}
+
+impl Fallocate {
+    fn new(fd: NornFd, offset: u64, len: u64, mode: i32) -> Self {
+        Self {
+            fd,
+            offset,
+            len,
+            mode,
+        }
+    }
+}
+
+impl Operation for Fallocate {
+    fn configure(self: Pin<&mut Self>) -> io_uring::squeue::Entry {
+        match self.fd.kind() {
+            FdKind::Fd(fd) => opcode::Fallocate::new(*fd, self.len),
+            FdKind::Fixed(fd) => opcode::Fallocate::new(*fd, self.len),
+        }
+        .offset(self.offset)
+        .mode(self.mode)
+        .build()
+    }
+
+    fn cleanup(&mut self, _: CQEResult) {}
+}
+
+impl Singleshot for Fallocate {
+    type Output = io::Result<()>;
+
+    fn complete(self, result: CQEResult) -> Self::Output {
+        result.result.map(|_| ())
     }
 }

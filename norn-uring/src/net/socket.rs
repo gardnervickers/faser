@@ -8,12 +8,11 @@ use std::net::SocketAddr;
 use std::os::fd::FromRawFd;
 use std::pin::Pin;
 
-use bytes::{Buf, BufMut};
-
 use io_uring::squeue::Flags;
 use io_uring::{opcode, types};
 use socket2::{Domain, Protocol, SockAddr, Type};
 
+use crate::buf::{StableBuf, StableBufMut};
 use crate::bufring::{BufRing, BufRingBuf};
 use crate::fd::NornFd;
 use crate::operation::{Operation, Singleshot};
@@ -67,7 +66,7 @@ impl Socket {
 
     pub(crate) async fn recv_from<B>(&self, buf: B) -> (io::Result<(usize, SocketAddr)>, B)
     where
-        B: BufMut + 'static,
+        B: StableBufMut + 'static,
     {
         let handle = crate::Handle::current();
         let op = RecvFrom::new(self.fd.clone(), buf);
@@ -76,7 +75,7 @@ impl Socket {
 
     pub(crate) async fn send_to<B>(&self, buf: B, addr: SocketAddr) -> (io::Result<usize>, B)
     where
-        B: Buf + 'static,
+        B: StableBuf + 'static,
     {
         let handle = crate::Handle::current();
         let op = SendTo::new(self.fd.clone(), buf, Some(addr));
@@ -150,7 +149,7 @@ struct SendTo<B> {
 
 impl<B> SendTo<B>
 where
-    B: Buf,
+    B: StableBuf,
 {
     pub(crate) fn new(fd: NornFd, buf: B, addr: Option<SocketAddr>) -> Self {
         let addr = addr.map(SockAddr::from);
@@ -166,7 +165,7 @@ where
 
 impl<B> Operation for SendTo<B>
 where
-    B: Buf,
+    B: StableBuf,
 {
     fn configure(self: Pin<&mut Self>) -> io_uring::squeue::Entry {
         let this = unsafe { self.get_unchecked_mut() };
@@ -174,7 +173,7 @@ where
         // Initialize the slice.
         {
             let slice = io::IoSlice::new(unsafe {
-                std::slice::from_raw_parts(this.buf.chunk().as_ptr(), this.buf.chunk().len())
+                std::slice::from_raw_parts(this.buf.stable_ptr(), this.buf.bytes_init())
             });
             this.slices.write([slice]);
         }
@@ -216,7 +215,7 @@ where
 
 impl<B> Singleshot for SendTo<B>
 where
-    B: Buf,
+    B: StableBuf,
 {
     type Output = (io::Result<usize>, B);
 
@@ -235,7 +234,7 @@ struct RecvFrom<B> {
 
 impl<B> RecvFrom<B>
 where
-    B: BufMut,
+    B: StableBufMut,
 {
     pub(crate) fn new(fd: NornFd, buf: B) -> Self {
         // Safety: We won't read from the socket addr until it's initialized.
@@ -252,17 +251,16 @@ where
 
 impl<B> Operation for RecvFrom<B>
 where
-    B: BufMut,
+    B: StableBufMut,
 {
     fn configure(self: Pin<&mut Self>) -> io_uring::squeue::Entry {
         let this = unsafe { self.get_unchecked_mut() };
 
-        let chunk = this.buf.chunk_mut();
-        let chunk = unsafe { chunk.as_uninit_slice_mut() };
+        let ptr = this.buf.stable_ptr_mut();
+        let len = this.buf.bytes_remaining();
+        let slice = io::IoSliceMut::new(unsafe { std::slice::from_raw_parts_mut(ptr, len) });
         // First we initialize the IoVecMut slice.
-        this.slices.write([io::IoSliceMut::new(unsafe {
-            &mut *(chunk as *mut [MaybeUninit<u8>] as *mut [u8])
-        })]);
+        this.slices.write([slice]);
         // Safety: We just initialized the slice.
         let slices = unsafe { this.slices.assume_init_mut() };
 
@@ -288,7 +286,7 @@ where
 
 impl<B> Singleshot for RecvFrom<B>
 where
-    B: BufMut,
+    B: StableBufMut,
 {
     type Output = (io::Result<(usize, SocketAddr)>, B);
 
@@ -297,7 +295,7 @@ where
             Ok(bytes_read) => {
                 let addr = self.addr.as_socket().unwrap();
                 let mut buf = self.buf;
-                unsafe { buf.advance_mut(bytes_read as usize) };
+                unsafe { buf.set_init(bytes_read as usize) };
                 (Ok((bytes_read as usize, addr)), buf)
             }
             Err(err) => (Err(err), self.buf),

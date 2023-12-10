@@ -2,9 +2,9 @@
 use std::io;
 use std::net::SocketAddr;
 
-use bytes::{Buf, BufMut};
 use socket2::{Domain, Type};
 
+use crate::buf::{StableBuf, StableBufMut};
 use crate::bufring::{BufRing, BufRingBuf};
 use crate::net::socket;
 
@@ -47,7 +47,7 @@ impl UdpSocket {
     /// once the operation has completed.
     pub async fn send_to<B>(&self, buf: B, addr: SocketAddr) -> (io::Result<usize>, B)
     where
-        B: Buf + 'static,
+        B: StableBuf + 'static,
     {
         self.inner.send_to(buf, addr).await
     }
@@ -59,7 +59,7 @@ impl UdpSocket {
     /// is too long to fit in the supplied, buffer, excess bytes may be discarded.
     pub async fn recv_from<B>(&self, buf: B) -> (io::Result<(usize, SocketAddr)>, B)
     where
-        B: BufMut + 'static,
+        B: StableBufMut + 'static,
     {
         self.inner.recv_from(buf).await
     }

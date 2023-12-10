@@ -121,11 +121,13 @@ impl OpenOptions {
         self
     }
 
+    /// Sets the option to open this file in O_SYNC mode.
     pub fn sync(&mut self, sync: bool) -> &mut Self {
         self.sync = sync;
         self
     }
 
+    /// Sets the option to open this file in O_DSYNC mode.
     pub fn dsync(&mut self, dsync: bool) -> &mut Self {
         self.dsync = dsync;
         self

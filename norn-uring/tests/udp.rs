@@ -1,5 +1,3 @@
-use std::io;
-
 use bytes::{Bytes, BytesMut};
 use norn_uring::bufring::BufRing;
 use norn_uring::net::UdpSocket;
@@ -98,7 +96,7 @@ fn echo_server_1k_requests() -> Result<(), Box<dyn std::error::Error>> {
         for i in 0..1024 {
             let payload = format!("hello-{}", i);
             let payload = payload.as_bytes().to_vec();
-            s1.send_to(io::Cursor::new(payload.clone()), addr).await.0?;
+            s1.send_to(payload.clone(), addr).await.0?;
             let (res, buf) = s1.recv_from(BytesMut::with_capacity(1024)).await;
             res?;
             assert_eq!(payload, buf)
