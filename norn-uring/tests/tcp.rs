@@ -19,7 +19,7 @@ fn incoming_connections() -> Result<(), Box<dyn std::error::Error>> {
             io::Result::Ok(())
         });
 
-        let mut incoming = Box::pin(listener.incoming());
+        let mut incoming = pin!(listener.incoming());
         let next = incoming.next().await.unwrap()?;
 
         Ok(())
