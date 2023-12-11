@@ -78,7 +78,7 @@ impl NornFd {
                     .submit(CloseFd {
                         fd: self.inner.kind,
                     })
-                    .await??;
+                    .await?;
                 self.inner.closed.set(true);
             } else {
                 self.inner.notify.wait().await;

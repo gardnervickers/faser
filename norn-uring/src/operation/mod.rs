@@ -121,7 +121,7 @@ impl<T> Future for Op<T>
 where
     T: Singleshot + 'static,
 {
-    type Output = io::Result<T::Output>;
+    type Output = T::Output;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
@@ -135,7 +135,7 @@ impl<T> futures_core::Stream for Op<T>
 where
     T: Multishot + 'static,
 {
-    type Item = io::Result<T::Item>;
+    type Item = T::Item;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.project();
@@ -264,20 +264,20 @@ where
         }
     }
 
-    fn poll_submit(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+    fn poll_submit(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
         let this = self.as_mut().project();
         match this {
             StageProj::Unsubmitted { unsubmitted } => {
-                let handle = ready!(unsubmitted.poll(cx)?);
+                let handle = ready!(unsubmitted.poll(cx));
                 Pin::set(
                     &mut self,
                     Stage::Submitted {
                         inner: SubmittedOp { inner: handle },
                     },
                 );
-                Poll::Ready(Ok(()))
+                Poll::Ready(())
             }
-            StageProj::Submitted { .. } => Poll::Ready(Ok(())),
+            StageProj::Submitted { .. } => Poll::Ready(()),
         }
     }
 }
@@ -295,12 +295,13 @@ impl<T> Future for UnsubmittedOp<T>
 where
     T: 'static,
 {
-    type Output = io::Result<TypedHandle<T>>;
+    type Output = TypedHandle<T>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
-        ready!(this.future.poll(cx)?);
-        Poll::Ready(Ok(this.handle.take().unwrap()))
+        ready!(this.future.poll(cx))
+            .expect("push future failed, future should not be polled during shutdown");
+        Poll::Ready(this.handle.take().unwrap())
     }
 }
 
@@ -351,17 +352,17 @@ impl<T> Future for Stage<T>
 where
     T: Singleshot + 'static,
 {
-    type Output = io::Result<T::Output>;
+    type Output = T::Output;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        ready!(self.as_mut().poll_submit(cx))?;
+        ready!(self.as_mut().poll_submit(cx));
         let this = self.as_mut().project();
         let inner = match this {
             StageProj::Unsubmitted { .. } => unreachable!("unsubmitted"),
             StageProj::Submitted { inner } => inner,
         };
         if let Some(result) = inner.try_complete() {
-            return Poll::Ready(Ok(result));
+            return Poll::Ready(result);
         }
         inner.inner.register_waker(cx.waker());
         Poll::Pending
@@ -372,17 +373,17 @@ impl<T> Stream for Stage<T>
 where
     T: Multishot + 'static,
 {
-    type Item = io::Result<T::Item>;
+    type Item = T::Item;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        ready!(self.as_mut().poll_submit(cx))?;
+        ready!(self.as_mut().poll_submit(cx));
         let this = self.as_mut().project();
         let inner = match this {
             StageProj::Unsubmitted { .. } => unreachable!("unsubmitted"),
             StageProj::Submitted { inner } => inner,
         };
         if let Some(result) = inner.try_next() {
-            return Poll::Ready(Some(Ok(result)));
+            return Poll::Ready(Some(result));
         }
         if inner.inner.is_complete() {
             return Poll::Ready(None);

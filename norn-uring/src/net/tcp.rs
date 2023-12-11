@@ -78,11 +78,8 @@ impl<'a> Stream for Incoming<'a> {
                         this.current.set(None);
                         return Poll::Ready(Some(Err(err)));
                     }
-                    Some(Ok(Err(err))) => {
-                        this.current.set(None);
-                        return Poll::Ready(Some(Err(err)));
-                    }
-                    Some(Ok(Ok(socket))) => {
+
+                    Some(Ok(socket)) => {
                         let socket = socket::Socket::from_fd(socket);
                         return Poll::Ready(Some(Ok(TcpStream { socket })));
                     }
@@ -144,5 +141,10 @@ impl TcpStream {
         B: StableBufMut + 'static,
     {
         self.socket.recv(buf).await
+    }
+
+    /// Close the socket.
+    pub async fn close(self) -> io::Result<()> {
+        self.socket.close().await
     }
 }

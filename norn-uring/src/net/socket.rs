@@ -37,7 +37,7 @@ impl Socket {
             socket_type,
             protocol,
         };
-        let fd = handle.submit(op).await??;
+        let fd = handle.submit(op).await?;
         Ok(Self::from_fd(fd))
     }
 
@@ -64,7 +64,7 @@ impl Socket {
     pub(crate) async fn accept(&self) -> io::Result<(Self, SocketAddr)> {
         let handle = crate::Handle::current();
         let op = Accept::<false>::new(self.fd.clone());
-        let (fd, addr) = handle.submit(op).await??;
+        let (fd, addr) = handle.submit(op).await?;
         let socket = Self::from_fd(fd);
         Ok((socket, addr))
     }
@@ -84,7 +84,7 @@ impl Socket {
 
         let handle = crate::Handle::current();
         let op = Connect::new(fd, addr);
-        handle.submit(op).await??;
+        handle.submit(op).await?;
         Ok(socket)
     }
 
@@ -94,7 +94,7 @@ impl Socket {
     ) -> io::Result<(BufRingBuf, SocketAddr)> {
         let handle = crate::Handle::current();
         let op = RecvFromRing::new(self.fd.clone(), ring.clone());
-        handle.submit(op).await?
+        handle.submit(op).await
     }
 
     pub(crate) async fn recv_from<B>(&self, buf: B) -> (io::Result<(usize, SocketAddr)>, B)
@@ -103,7 +103,7 @@ impl Socket {
     {
         let handle = crate::Handle::current();
         let op = RecvFrom::new(self.fd.clone(), buf);
-        handle.submit(op).await.unwrap()
+        handle.submit(op).await
     }
 
     pub(crate) async fn send_to<B>(&self, buf: B, addr: SocketAddr) -> (io::Result<usize>, B)
@@ -112,7 +112,7 @@ impl Socket {
     {
         let handle = crate::Handle::current();
         let op = SendTo::new(self.fd.clone(), buf, Some(addr));
-        handle.submit(op).await.unwrap()
+        handle.submit(op).await
     }
 
     pub(crate) async fn recv<B>(&self, buf: B) -> (io::Result<usize>, B)
@@ -121,7 +121,7 @@ impl Socket {
     {
         let handle = crate::Handle::current();
         let op = Recv::new(self.fd.clone(), buf);
-        handle.submit(op).await.unwrap()
+        handle.submit(op).await
     }
 
     pub(crate) async fn send<B>(&self, buf: B) -> (io::Result<usize>, B)
@@ -130,7 +130,7 @@ impl Socket {
     {
         let handle = crate::Handle::current();
         let op = Send::new(self.fd.clone(), buf);
-        handle.submit(op).await.unwrap()
+        handle.submit(op).await
     }
 
     pub(crate) async fn shutdown(&self, how: std::net::Shutdown) -> io::Result<()> {
@@ -141,7 +141,7 @@ impl Socket {
             std::net::Shutdown::Both => libc::SHUT_RDWR,
         };
         let op = Shutdown::new(self.fd.clone(), how);
-        handle.submit(op).await?
+        handle.submit(op).await
     }
 
     pub(crate) fn local_addr(&self) -> io::Result<SocketAddr> {

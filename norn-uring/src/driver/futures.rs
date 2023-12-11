@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::task::{ready, Context, Poll};
@@ -36,7 +37,7 @@ impl PushFuture {
     }
 }
 
-impl<'a> std::future::Future for PushFutureInner<'a> {
+impl<'a> Future for PushFutureInner<'a> {
     type Output = Result<(), SubmitError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -92,7 +93,7 @@ pin_project_lite::pin_project! {
     }
 }
 
-impl std::future::Future for PushFuture {
+impl Future for PushFuture {
     type Output = Result<(), SubmitError>;
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.as_mut().project();

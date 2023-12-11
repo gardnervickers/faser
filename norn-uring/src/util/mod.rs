@@ -28,5 +28,5 @@ pub async fn noop() {
             Ok(())
         }
     }
-    handle.submit(Nop).await.unwrap().unwrap();
+    handle.submit(Nop).await.unwrap();
 }

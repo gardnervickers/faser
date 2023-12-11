@@ -33,7 +33,7 @@ impl File {
         let creation_mode = opts.get_creation_mode()?;
         let open = Open::new(path.as_ref(), access_mode, creation_mode)?;
         let handle = crate::Handle::current();
-        let fd = handle.submit(open).await??;
+        let fd = handle.submit(open).await?;
         Ok(Self { fd, handle })
     }
 
@@ -56,7 +56,7 @@ impl File {
         B: StableBufMut + 'static,
     {
         let read = ReadAt::new(self.fd.clone(), buf, offset);
-        self.handle.submit(read).await.unwrap()
+        self.handle.submit(read).await
     }
 
     /// Write the specified buffer to the file.
@@ -67,33 +67,33 @@ impl File {
         B: StableBuf + 'static,
     {
         let write = WriteAt::new(self.fd.clone(), buf, offset);
-        self.handle.submit(write).await.unwrap()
+        self.handle.submit(write).await
     }
 
     /// Sync the file and metadata to disk.
     pub async fn sync(&self) -> io::Result<()> {
         let flags = FsyncFlags::empty();
         let sync = Sync::new(self.fd.clone(), flags);
-        self.handle.submit(sync).await.unwrap()
+        self.handle.submit(sync).await
     }
 
     /// Sync only the data in the file to disk.
     pub async fn datasync(&self) -> io::Result<()> {
         let flags = FsyncFlags::DATASYNC;
         let sync = Sync::new(self.fd.clone(), flags);
-        self.handle.submit(sync).await.unwrap()
+        self.handle.submit(sync).await
     }
 
     /// Sync a range of the file.
     pub async fn sync_range(&self, offset: u64, len: u32, flags: u32) -> io::Result<()> {
         let sync = SyncRange::new(self.fd.clone(), offset, len, flags);
-        self.handle.submit(sync).await.unwrap()
+        self.handle.submit(sync).await
     }
 
     /// Call `fallocate` on the file.
     pub async fn fallocate(&self, offset: u64, len: u64, mode: i32) -> io::Result<()> {
         let fallocate = Fallocate::new(self.fd.clone(), offset, len, mode);
-        self.handle.submit(fallocate).await.unwrap()
+        self.handle.submit(fallocate).await
     }
     /// Allocate additional space in the file without changing the file length metadata.
     ///

@@ -90,6 +90,11 @@ pub trait Park {
     fn needs_park(&self) -> bool;
 
     /// Shutdown the park layer.
+    ///
+    /// Callers should not use any services provided by the park layer
+    /// after calling shutdown. There is no guarantee that wakers
+    /// registered with the park layer will be invoked after shutdown
+    /// is triggered.
     fn shutdown(&mut self);
 }
 

@@ -15,12 +15,14 @@ fn incoming_connections() -> Result<(), Box<dyn std::error::Error>> {
 
         // Connect
         let handle = spawn(async {
-            let stream = TcpStream::connect("0.0.0.0:9090".parse().unwrap()).await?;
+            let _ = TcpStream::connect("0.0.0.0:9090".parse().unwrap()).await?;
             io::Result::Ok(())
         });
 
         let mut incoming = pin!(listener.incoming());
         let next = incoming.next().await.unwrap()?;
+        next.close().await?;
+        handle.await??;
 
         Ok(())
     })
