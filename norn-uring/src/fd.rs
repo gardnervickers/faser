@@ -15,6 +15,7 @@ use std::os::fd::{AsRawFd, RawFd};
 use std::rc::Rc;
 
 use io_uring::{opcode, types};
+use log::warn;
 
 use crate::operation::{Operation, Singleshot};
 use crate::util::notify::Notify;
@@ -98,7 +99,7 @@ impl Drop for Inner {
         if !self.closed.get() {
             let handle = Handle::current();
             if let Err(err) = handle.close_fd(&self.kind) {
-                log::error!("failed to close fd: {}", err);
+                warn!(target: "norn_uring::fd", "close_fd.failed: {}", err);
             }
         }
     }
