@@ -13,7 +13,7 @@ use futures_core::Stream;
 
 use crate::driver::PushFuture;
 
-pub(crate) trait Operation {
+pub trait Operation {
     /// Configure a new [`io_uring::squeue::Entry`] for this operation.
     ///
     /// Self will be pinned for the duration of the operation.
@@ -26,7 +26,7 @@ pub(crate) trait Operation {
     fn cleanup(&mut self, result: CQEResult);
 }
 
-pub(crate) trait Singleshot: Operation {
+pub trait Singleshot: Operation {
     type Output;
 
     /// Complete can be called multiple times in the case of a multi-shot operation.
@@ -38,7 +38,7 @@ pub(crate) trait Singleshot: Operation {
     }
 }
 
-pub(crate) trait Multishot: Operation {
+pub trait Multishot: Operation {
     type Item;
 
     fn update(&mut self, result: CQEResult) -> Self::Item;
@@ -61,7 +61,7 @@ impl ConfiguredEntry {
 
 pin_project_lite::pin_project! {
     #[must_use = "future does nothing unless you `.await` or poll them"]
-    pub(crate) struct Op<T>
+    pub struct Op<T>
     where
         T: 'static,
     {

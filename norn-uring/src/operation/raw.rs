@@ -101,7 +101,7 @@ where
 }
 
 #[derive(Debug)]
-pub(crate) struct CQEResult {
+pub struct CQEResult {
     pub(crate) result: io::Result<u32>,
     pub(crate) flags: u32,
 }

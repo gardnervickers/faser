@@ -1,4 +1,5 @@
 use std::io;
+use std::mem::ManuallyDrop;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::task::{ready, Context, Poll};
@@ -108,7 +109,11 @@ impl std::fmt::Debug for TcpStream {
 impl TcpStream {
     /// Creates a TCP connection to the specified address.
     pub async fn connect(addr: SocketAddr) -> io::Result<TcpStream> {
-        let socket = socket::Socket::connect(addr).await?;
+        let domain = Domain::for_address(addr);
+        let socket_type = Type::STREAM;
+        let protocol = None;
+        let socket = socket::Socket::open(domain, socket_type, protocol).await?;
+        socket.connect(addr).await?;
         Ok(TcpStream { socket })
     }
 
@@ -127,24 +132,173 @@ impl TcpStream {
         self.socket.shutdown(how).await
     }
 
-    /// Send the given buffer to the connected peer.
-    pub async fn send<B>(&self, buf: B) -> (io::Result<usize>, B)
-    where
-        B: StableBuf + 'static,
-    {
-        self.socket.send(buf).await
-    }
-
-    /// Receive a buffer from the connected peer.
-    pub async fn recv<B>(&self, buf: B) -> (io::Result<usize>, B)
-    where
-        B: StableBufMut + 'static,
-    {
-        self.socket.recv(buf).await
+    /// Split the stream into a reader and a writer.
+    pub fn split(&self) -> (TcpStreamReader, TcpStreamWriter) {
+        let reader = TcpStreamReader {
+            inner: ReadyStream::new(self.socket.clone()),
+        };
+        let writer = TcpStreamWriter {
+            inner: ReadyStream::new(self.socket.clone()),
+        };
+        (reader, writer)
     }
 
     /// Close the socket.
     pub async fn close(self) -> io::Result<()> {
         self.socket.close().await
+    }
+}
+
+impl crate::io::AsyncReadOwned for TcpStream {
+    type ReadFuture<'a, B> = Op<socket::Recv<B>>
+    where
+        B: StableBufMut,
+        Self: 'a;
+
+    fn read<B: StableBufMut>(&mut self, buf: B) -> Self::ReadFuture<'_, B> {
+        self.socket.recv(buf)
+    }
+}
+
+impl crate::io::AsyncWriteOwned for TcpStream {
+    type WriteFuture<'a, B> = Op<socket::Send<B>>
+    where
+        B: StableBuf,
+        Self: 'a;
+
+    fn write<B: StableBuf>(&mut self, buf: B) -> Self::WriteFuture<'static, B> {
+        self.socket.send(buf)
+    }
+}
+
+pin_project_lite::pin_project! {
+    pub struct TcpStreamReader {
+        #[pin]
+        inner: ReadyStream,
+    }
+}
+
+pin_project_lite::pin_project! {
+    pub struct TcpStreamWriter {
+        #[pin]
+        inner: ReadyStream,
+    }
+}
+
+impl tokio::io::AsyncRead for TcpStreamReader {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        let this = self.project();
+        let n = ready!(this.inner.poll_op(
+            cx,
+            |sock| unsafe { sock.recv(buf.unfilled_mut()) },
+            socket::READ_FLAGS as u32,
+        ))?;
+        buf.advance(n);
+        Poll::Ready(Ok(()))
+    }
+}
+
+impl tokio::io::AsyncWrite for TcpStreamWriter {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        let this = self.project();
+        let n = ready!(this
+            .inner
+            .poll_op(cx, |sock| sock.send(buf), socket::WRITE_FLAGS as u32))?;
+        Poll::Ready(Ok(n))
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
+        use std::io::Write;
+        let this = self.project();
+        ready!(this
+            .inner
+            .poll_op(cx, |mut sock| sock.flush(), socket::WRITE_FLAGS as u32))?;
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
+        let this = self.project();
+        ready!(this.inner.poll_op(
+            cx,
+            |sock| sock.shutdown(std::net::Shutdown::Write),
+            socket::WRITE_FLAGS as u32
+        ))?;
+        Poll::Ready(Ok(()))
+    }
+}
+
+pin_project_lite::pin_project! {
+    struct ReadyStream {
+        inner: socket::Socket,
+        #[pin]
+        armed: Option<Op<socket::Poll<true>>>,
+        notified: bool,
+    }
+}
+
+impl ReadyStream {
+    fn new(inner: socket::Socket) -> Self {
+        Self {
+            inner,
+            armed: None,
+            notified: true,
+        }
+    }
+
+    fn poll_op<U>(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        mut f: impl FnMut(ManuallyDrop<socket2::Socket>) -> io::Result<U>,
+        flags: u32,
+    ) -> Poll<io::Result<U>> {
+        loop {
+            ready!(self.as_mut().poll_ready(cx, flags))?;
+            let this = self.as_mut().project();
+            let sock = this.inner.as_socket();
+            match f(sock) {
+                Ok(res) => {
+                    return Poll::Ready(Ok(res));
+                }
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                    println!("would block");
+                    *this.notified = false;
+                    ready!(self.as_mut().poll_ready(cx, flags))?;
+                    continue;
+                }
+                Err(err) => {
+                    return Poll::Ready(Err(err));
+                }
+            }
+        }
+    }
+}
+
+impl ReadyStream {
+    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>, flags: u32) -> Poll<io::Result<()>> {
+        let mut this = self.project();
+        loop {
+            if *this.notified {
+                // If the notified bit is set, return immediately.
+                return Poll::Ready(Ok(()));
+            }
+            if let Some(armed) = this.armed.as_mut().as_pin_mut() {
+                if let Some(res) = ready!(armed.poll_next(cx)) {
+                    res?;
+                    *this.notified = true;
+                } else {
+                    this.armed.set(None);
+                }
+            } else {
+                this.armed.set(Some(this.inner.poll_ready(flags)));
+            }
+        }
     }
 }

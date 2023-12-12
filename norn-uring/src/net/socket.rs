@@ -17,13 +17,18 @@ use crate::bufring::{BufRing, BufRingBuf};
 use crate::fd::NornFd;
 use crate::operation::{Multishot, Op, Operation, Singleshot};
 
+#[derive(Clone)]
 pub(crate) struct Socket {
     fd: NornFd,
+    handle: crate::Handle,
 }
 
 impl Socket {
     pub(crate) fn from_fd(fd: NornFd) -> Self {
-        Self { fd }
+        Self {
+            fd,
+            handle: crate::Handle::current(),
+        }
     }
 
     pub(crate) async fn open(
@@ -62,86 +67,76 @@ impl Socket {
     }
 
     pub(crate) async fn accept(&self) -> io::Result<(Self, SocketAddr)> {
-        let handle = crate::Handle::current();
         let op = Accept::<false>::new(self.fd.clone());
-        let (fd, addr) = handle.submit(op).await?;
+        let (fd, addr) = self.handle.submit(op).await?;
         let socket = Self::from_fd(fd);
         Ok((socket, addr))
     }
 
     pub(crate) fn accept_multi(&self) -> Op<Accept<true>> {
-        let handle = crate::Handle::current();
         let op = Accept::<true>::new(self.fd.clone());
-        handle.submit(op)
+        self.handle.submit(op)
     }
 
-    pub(crate) async fn connect(addr: SocketAddr) -> io::Result<Self> {
-        let domain = Domain::for_address(addr);
-        let socket_type = Type::STREAM;
-        let protocol = None;
-        let socket = Self::open(domain, socket_type, protocol).await?;
-        let fd = socket.fd.clone();
-
-        let handle = crate::Handle::current();
-        let op = Connect::new(fd, addr);
-        handle.submit(op).await?;
-        Ok(socket)
+    pub(crate) async fn connect(&self, addr: SocketAddr) -> io::Result<()> {
+        let op = Connect::new(self.fd.clone(), addr);
+        self.handle.submit(op).await?;
+        Ok(())
     }
 
     pub(crate) async fn recv_from_ring(
         &self,
         ring: &BufRing,
     ) -> io::Result<(BufRingBuf, SocketAddr)> {
-        let handle = crate::Handle::current();
         let op = RecvFromRing::new(self.fd.clone(), ring.clone());
-        handle.submit(op).await
+        self.handle.submit(op).await
     }
 
     pub(crate) async fn recv_from<B>(&self, buf: B) -> (io::Result<(usize, SocketAddr)>, B)
     where
         B: StableBufMut + 'static,
     {
-        let handle = crate::Handle::current();
         let op = RecvFrom::new(self.fd.clone(), buf);
-        handle.submit(op).await
+        self.handle.submit(op).await
     }
 
     pub(crate) async fn send_to<B>(&self, buf: B, addr: SocketAddr) -> (io::Result<usize>, B)
     where
         B: StableBuf + 'static,
     {
-        let handle = crate::Handle::current();
         let op = SendTo::new(self.fd.clone(), buf, Some(addr));
-        handle.submit(op).await
+        self.handle.submit(op).await
     }
 
-    pub(crate) async fn recv<B>(&self, buf: B) -> (io::Result<usize>, B)
+    pub(crate) fn recv<B>(&self, buf: B) -> Op<Recv<B>>
     where
         B: StableBufMut + 'static,
     {
-        let handle = crate::Handle::current();
         let op = Recv::new(self.fd.clone(), buf);
-        handle.submit(op).await
+        self.handle.submit(op)
     }
 
-    pub(crate) async fn send<B>(&self, buf: B) -> (io::Result<usize>, B)
+    pub(crate) fn send<B>(&self, buf: B) -> Op<Send<B>>
     where
         B: StableBuf + 'static,
     {
-        let handle = crate::Handle::current();
         let op = Send::new(self.fd.clone(), buf);
-        handle.submit(op).await
+        self.handle.submit(op)
     }
 
     pub(crate) async fn shutdown(&self, how: std::net::Shutdown) -> io::Result<()> {
-        let handle = crate::Handle::current();
         let how = match how {
             std::net::Shutdown::Read => libc::SHUT_RD,
             std::net::Shutdown::Write => libc::SHUT_WR,
             std::net::Shutdown::Both => libc::SHUT_RDWR,
         };
         let op = Shutdown::new(self.fd.clone(), how);
-        handle.submit(op).await
+        self.handle.submit(op).await
+    }
+
+    pub(crate) fn poll_ready<const MULTI: bool>(&self, events: u32) -> Op<Poll<MULTI>> {
+        let op = Poll::<MULTI>::new(self.fd.clone(), events);
+        self.handle.submit(op)
     }
 
     pub(crate) fn local_addr(&self) -> io::Result<SocketAddr> {
@@ -152,7 +147,7 @@ impl Socket {
         Ok(self.as_socket().peer_addr()?.as_socket().unwrap())
     }
 
-    fn as_socket(&self) -> ManuallyDrop<socket2::Socket> {
+    pub(crate) fn as_socket(&self) -> ManuallyDrop<socket2::Socket> {
         match self.fd.kind() {
             crate::fd::FdKind::Fd(fd) => {
                 let sock = unsafe { socket2::Socket::from_raw_fd(fd.0) };
@@ -164,6 +159,41 @@ impl Socket {
 
     pub(crate) async fn close(self) -> io::Result<()> {
         self.fd.close().await
+    }
+}
+
+pub(crate) const READ_FLAGS: i16 = read_flags() | common_flags();
+pub(crate) const WRITE_FLAGS: i16 = write_flags() | common_flags();
+
+const fn read_flags() -> i16 {
+    libc::POLLIN | libc::POLLPRI
+}
+
+const fn common_flags() -> i16 {
+    libc::POLLERR | libc::POLLHUP | libc::POLLNVAL
+}
+
+const fn write_flags() -> i16 {
+    libc::POLLOUT
+}
+
+impl crate::io::AsyncReadOwned for Socket {
+    type ReadFuture<'a, B> = Op<Recv<B>>
+    where
+        B: StableBufMut;
+
+    fn read<B: StableBufMut>(&mut self, buf: B) -> Self::ReadFuture<'static, B> {
+        self.recv(buf)
+    }
+}
+
+impl crate::io::AsyncWriteOwned for Socket {
+    type WriteFuture<'a, B> = Op<Send<B>>
+    where
+        B: StableBuf;
+
+    fn write<B: StableBuf>(&mut self, buf: B) -> Self::WriteFuture<'_, B> {
+        self.send(buf)
     }
 }
 
@@ -562,8 +592,8 @@ impl Singleshot for Shutdown {
         result.result.map(|_| ())
     }
 }
-
-struct Recv<B> {
+#[derive(Debug)]
+pub struct Recv<B> {
     fd: NornFd,
     buf: B,
 }
@@ -613,7 +643,8 @@ where
     }
 }
 
-struct Send<B> {
+#[derive(Debug)]
+pub struct Send<B> {
     fd: NornFd,
     buf: B,
 }
@@ -653,5 +684,50 @@ where
 
     fn complete(self, result: crate::operation::CQEResult) -> Self::Output {
         (result.result.map(|v| v as usize), self.buf)
+    }
+}
+
+pub struct Poll<const MULTI: bool> {
+    fd: NornFd,
+    events: u32,
+}
+
+impl<const MULTI: bool> Poll<MULTI> {
+    pub(crate) fn new(fd: NornFd, events: u32) -> Self {
+        Self { fd, events }
+    }
+}
+
+impl<const MULTI: bool> Operation for Poll<MULTI> {
+    fn configure(self: Pin<&mut Self>) -> io_uring::squeue::Entry {
+        let this = unsafe { self.get_unchecked_mut() };
+        match this.fd.kind() {
+            crate::fd::FdKind::Fd(fd) => {
+                opcode::PollAdd::new(*fd, this.events).multi(MULTI).build()
+            }
+            crate::fd::FdKind::Fixed(fd) => {
+                opcode::PollAdd::new(*fd, this.events).multi(MULTI).build()
+            }
+        }
+    }
+
+    fn cleanup(&mut self, _: crate::operation::CQEResult) {}
+}
+
+impl Multishot for Poll<true> {
+    type Item = io::Result<()>;
+
+    fn update(&mut self, result: crate::operation::CQEResult) -> Self::Item {
+        result.result?;
+        Ok(())
+    }
+}
+
+impl Singleshot for Poll<false> {
+    type Output = io::Result<()>;
+
+    fn complete(self, result: crate::operation::CQEResult) -> Self::Output {
+        result.result?;
+        Ok(())
     }
 }
