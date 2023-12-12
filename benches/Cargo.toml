@@ -12,6 +12,10 @@ norn-uring = { path = "../norn-uring" }
 norn-executor = { path = "../norn-executor" }
 norn-timer = { path = "../norn-timer" }
 io-uring = "0.6"
+hyper = { version = "1", features = ["client", "server", "http2"] }
+pin-project-lite = "0.2.13"
+tokio = { version = "1.35.0", features = ["io-util"] }
+http-body-util = "0.1.0"
 
 [dev-dependencies]
 bencher = "0.1.5"
@@ -30,4 +34,9 @@ harness = false
 [[bench]]
 name = "timers"
 path = "timers.rs"
+harness = false
+
+[[bench]]
+name = "hyper"
+path = "hyper.rs"
 harness = false

@@ -244,6 +244,19 @@ impl tokio::io::AsyncWrite for TcpStream {
         let this = self.project();
         this.writer.poll_shutdown(cx)
     }
+
+    fn poll_write_vectored(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &[io::IoSlice<'_>],
+    ) -> Poll<Result<usize, io::Error>> {
+        let this = self.project();
+        this.writer.poll_write_vectored(cx, bufs)
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        self.writer.is_write_vectored()
+    }
 }
 
 pin_project_lite::pin_project! {
@@ -269,12 +282,16 @@ impl tokio::io::AsyncRead for TcpStreamReader {
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
         let this = self.project();
+
         let n = ready!(this.inner.poll_op(
             cx,
-            |sock| unsafe { sock.recv(buf.unfilled_mut()) },
+            |sock| { unsafe { sock.recv(buf.unfilled_mut()) } },
             socket::READ_FLAGS as u32,
         ))?;
-        buf.advance(n);
+        unsafe {
+            buf.assume_init(n);
+            buf.advance(n);
+        }
         Poll::Ready(Ok(()))
     }
 }
@@ -309,6 +326,24 @@ impl tokio::io::AsyncWrite for TcpStreamWriter {
             socket::WRITE_FLAGS as u32
         ))?;
         Poll::Ready(Ok(()))
+    }
+
+    fn poll_write_vectored(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &[io::IoSlice<'_>],
+    ) -> Poll<Result<usize, io::Error>> {
+        let this = self.project();
+        let n = ready!(this.inner.poll_op(
+            cx,
+            |sock| sock.send_vectored(bufs),
+            socket::WRITE_FLAGS as u32
+        ))?;
+        Poll::Ready(Ok(n))
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        true
     }
 }
 
