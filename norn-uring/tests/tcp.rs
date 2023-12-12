@@ -4,7 +4,6 @@ use std::pin::pin;
 
 use futures_util::StreamExt;
 use norn_executor::spawn;
-use norn_uring::io::{AsyncWriteOwned, AsyncWriteOwnedExt};
 use norn_uring::net::{TcpListener, TcpStream};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -31,23 +30,29 @@ fn incoming_connections() -> Result<(), Box<dyn std::error::Error>> {
     })
 }
 
+#[test]
 fn echo() -> Result<(), Box<dyn std::error::Error>> {
     util::with_test_env(|| async {
         let server = EchoServer::new().await?;
 
         let addr = server.local_addr()?;
         spawn(server.run()).detach();
-        let mut conn = TcpStream::connect(addr).await?;
+        let conn = TcpStream::connect(addr).await?;
 
         // Create a 128KB buffer containing the string "hello" repeated.
         let mut buf = Vec::with_capacity(128 * 1024);
-        for _ in 0..4 {
+        for _ in 0..128 {
             buf.extend_from_slice(b"hello");
         }
         let (reader, writer) = conn.split();
         let mut writer = pin!(writer);
         let mut reader = pin!(reader);
         writer.write_all(&buf[..]).await?;
+        writer.flush().await?;
+        let mut buf2 = vec![0; buf.len()];
+        println!("doing read");
+        reader.read_exact(&mut buf2[..]).await?;
+        assert_eq!(buf, buf2);
         //reader.read(buf.as_mut_slice()).await?;
 
         Ok(())

@@ -260,20 +260,24 @@ impl ReadyStream {
         flags: u32,
     ) -> Poll<io::Result<U>> {
         loop {
+            log::trace!("poll_op");
             ready!(self.as_mut().poll_ready(cx, flags))?;
+            log::trace!("poll_op.ready");
             let this = self.as_mut().project();
             let sock = this.inner.as_socket();
             match f(sock) {
                 Ok(res) => {
+                    log::trace!("poll_op.success");
                     return Poll::Ready(Ok(res));
                 }
                 Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
-                    println!("would block");
+                    log::trace!("poll_op.would_block");
                     *this.notified = false;
                     ready!(self.as_mut().poll_ready(cx, flags))?;
                     continue;
                 }
                 Err(err) => {
+                    log::trace!("poll_op.err");
                     return Poll::Ready(Err(err));
                 }
             }

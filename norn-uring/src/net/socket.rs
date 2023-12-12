@@ -10,6 +10,7 @@ use std::pin::Pin;
 
 use io_uring::squeue::Flags;
 use io_uring::{opcode, types};
+use libc::O_NONBLOCK;
 use socket2::{Domain, Protocol, SockAddr, Type};
 
 use crate::buf::{StableBuf, StableBufMut};
@@ -43,7 +44,8 @@ impl Socket {
             protocol,
         };
         let fd = handle.submit(op).await?;
-        Ok(Self::from_fd(fd))
+        let this = Self::from_fd(fd);
+        Ok(this)
     }
 
     pub(crate) async fn bind(
@@ -55,7 +57,6 @@ impl Socket {
         let socket = Self::open(domain, socket_type, None).await?;
         let s = socket.as_socket();
         s.set_reuse_address(true)?;
-        s.set_nonblocking(true)?;
         s.bind(&addr)?;
         Ok(socket)
     }
@@ -477,17 +478,19 @@ impl<const MULTI: bool> Operation for Accept<MULTI> {
         match this.fd.kind() {
             crate::fd::FdKind::Fd(fd) => {
                 if MULTI {
-                    opcode::AcceptMulti::new(*fd).build()
+                    opcode::AcceptMulti::new(*fd).flags(O_NONBLOCK).build()
                 } else {
                     opcode::Accept::new(*fd, this.addr.as_ptr() as *mut _, this.addr.len() as _)
+                        .flags(O_NONBLOCK)
                         .build()
                 }
             }
             crate::fd::FdKind::Fixed(fd) => {
                 if MULTI {
-                    opcode::AcceptMulti::new(*fd).build()
+                    opcode::AcceptMulti::new(*fd).flags(O_NONBLOCK).build()
                 } else {
                     opcode::Accept::new(*fd, this.addr.as_ptr() as *mut _, this.addr.len() as _)
+                        .flags(O_NONBLOCK)
                         .build()
                 }
             }

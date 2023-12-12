@@ -8,7 +8,7 @@ where
     F: Future<Output = Result<U, Box<dyn std::error::Error>>>,
 {
     let _ = env_logger::builder()
-        .filter_level(log::LevelFilter::Debug)
+        .filter_level(log::LevelFilter::Trace)
         .is_test(true)
         .try_init();
 
