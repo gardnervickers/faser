@@ -85,12 +85,9 @@ impl Socket {
         Ok(())
     }
 
-    pub(crate) async fn recv_from_ring(
-        &self,
-        ring: &BufRing,
-    ) -> io::Result<(BufRingBuf, SocketAddr)> {
+    pub(crate) fn recv_from_ring(&self, ring: &BufRing) -> Op<RecvFromRing> {
         let op = RecvFromRing::new(self.fd.clone(), ring.clone());
-        self.handle.submit(op).await
+        self.handle.submit(op)
     }
 
     pub(crate) async fn recv_from<B>(&self, buf: B) -> (io::Result<(usize, SocketAddr)>, B)
@@ -176,26 +173,6 @@ const fn common_flags() -> i16 {
 
 const fn write_flags() -> i16 {
     libc::POLLOUT
-}
-
-impl crate::io::AsyncReadOwned for Socket {
-    type ReadFuture<'a, B> = Op<Recv<B>>
-    where
-        B: StableBufMut;
-
-    fn read<B: StableBufMut>(&mut self, buf: B) -> Self::ReadFuture<'static, B> {
-        self.recv(buf)
-    }
-}
-
-impl crate::io::AsyncWriteOwned for Socket {
-    type WriteFuture<'a, B> = Op<Send<B>>
-    where
-        B: StableBuf;
-
-    fn write<B: StableBuf>(&mut self, buf: B) -> Self::WriteFuture<'_, B> {
-        self.send(buf)
-    }
 }
 
 struct OpenSocket {
@@ -396,7 +373,8 @@ where
     }
 }
 
-struct RecvFromRing {
+#[derive(Debug)]
+pub struct RecvFromRing {
     fd: NornFd,
     ring: BufRing,
     addr: SockAddr,

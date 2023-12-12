@@ -8,16 +8,44 @@ use futures_core::Stream;
 use socket2::{Domain, Type};
 
 use crate::buf::{StableBuf, StableBufMut};
+use crate::bufring::BufRing;
 use crate::net::socket;
 use crate::operation::Op;
 
 use super::socket::Accept;
 
+const LOG: &str = "norn-uring::net::tcp";
+
 /// A TCP listener.
 ///
 /// A TcpListener can be used to accept incoming TCP connections.
 pub struct TcpListener {
-    inner: socket::Socket,
+    socket: socket::Socket,
+}
+
+/// A TCP socket.
+///
+/// [`TcpSocket`] provides a low-level interface for configuring a socket
+/// and sending or receiving owned buffers.
+///
+/// A [`TcpSocket`] can be converted into a [`TcpStream`] using [`into_stream`].
+/// [`TcpStream`] is a stateful wrapper around [`TcpSocket`] that implements
+/// [`AsyncRead`](tokio::io::AsyncRead) and [`AsyncWrite`](tokio::io::AsyncWrite).
+pub struct TcpSocket {
+    socket: socket::Socket,
+}
+
+pin_project_lite::pin_project! {
+    /// [`TcpStream`] represents a connected TCP socket.
+    ///
+    /// Bytes can be read from and written to the socket using the
+    /// [`AsyncRead`](tokio::io::AsyncRead) and [`AsyncWrite`](tokio::io::AsyncWrite) traits.
+    pub struct TcpStream {
+        #[pin]
+        reader: TcpStreamReader,
+        #[pin]
+        writer: TcpStreamWriter,
+    }
 }
 
 impl std::fmt::Debug for TcpListener {
@@ -26,36 +54,48 @@ impl std::fmt::Debug for TcpListener {
     }
 }
 
+impl std::fmt::Debug for TcpSocket {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TcpSocket").finish()
+    }
+}
+
+impl std::fmt::Debug for TcpStream {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TcpStream").finish()
+    }
+}
+
 impl TcpListener {
     /// Creates a TCP listener bound to the specified address.
     pub async fn bind(addr: SocketAddr, backlog: u32) -> io::Result<TcpListener> {
         let inner = socket::Socket::bind(addr, Domain::for_address(addr), Type::STREAM).await?;
         inner.listen(backlog)?;
-        Ok(TcpListener { inner })
+        Ok(TcpListener { socket: inner })
     }
 
     /// Returns the local address that this listener is bound to.
     pub fn local_addr(&self) -> io::Result<SocketAddr> {
-        self.inner.local_addr()
+        self.socket.local_addr()
     }
 
     /// Accepts a new incoming connection to this listener.
-    pub async fn accept(&self) -> io::Result<(TcpStream, SocketAddr)> {
-        let (socket, addr) = self.inner.accept().await?;
-        Ok((TcpStream { socket }, addr))
+    pub async fn accept(&self) -> io::Result<(TcpSocket, SocketAddr)> {
+        let (socket, addr) = self.socket.accept().await?;
+        Ok((TcpSocket { socket }, addr))
     }
 
     /// Returns a stream of incoming connections.
     pub fn incoming(&self) -> Incoming<'_> {
         Incoming {
-            listener: &self.inner,
+            listener: &self.socket,
             current: None,
         }
     }
 
     /// Closes the listener.
     pub async fn close(self) -> io::Result<()> {
-        self.inner.close().await
+        self.socket.close().await
     }
 }
 
@@ -68,7 +108,7 @@ pin_project_lite::pin_project! {
 }
 
 impl<'a> Stream for Incoming<'a> {
-    type Item = io::Result<TcpStream>;
+    type Item = io::Result<TcpSocket>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.project();
@@ -82,7 +122,7 @@ impl<'a> Stream for Incoming<'a> {
 
                     Some(Ok(socket)) => {
                         let socket = socket::Socket::from_fd(socket);
-                        return Poll::Ready(Some(Ok(TcpStream { socket })));
+                        return Poll::Ready(Some(Ok(TcpSocket { socket })));
                     }
                     None => {
                         this.current.set(None);
@@ -95,26 +135,15 @@ impl<'a> Stream for Incoming<'a> {
     }
 }
 
-/// A TCP stream.
-pub struct TcpStream {
-    socket: socket::Socket,
-}
-
-impl std::fmt::Debug for TcpStream {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TcpStream").finish()
-    }
-}
-
-impl TcpStream {
+impl TcpSocket {
     /// Creates a TCP connection to the specified address.
-    pub async fn connect(addr: SocketAddr) -> io::Result<TcpStream> {
+    pub async fn connect(addr: SocketAddr) -> io::Result<TcpSocket> {
         let domain = Domain::for_address(addr);
         let socket_type = Type::STREAM;
         let protocol = None;
         let socket = socket::Socket::open(domain, socket_type, protocol).await?;
         socket.connect(addr).await?;
-        Ok(TcpStream { socket })
+        Ok(TcpSocket { socket })
     }
 
     /// Returns the local address that this stream is bound to.
@@ -132,15 +161,44 @@ impl TcpStream {
         self.socket.shutdown(how).await
     }
 
-    /// Split the stream into a reader and a writer.
-    pub fn split(&self) -> (TcpStreamReader, TcpStreamWriter) {
+    /// Recv data into the given buffer.
+    ///
+    /// This takes ownership of the buffer, and returns future which resolves
+    /// to a tuple of the original buffer and the number of bytes read.
+    pub fn recv<B: StableBufMut>(&self, buf: B) -> Op<socket::Recv<B>> {
+        self.socket.recv(buf)
+    }
+
+    /// Send data from the given buffer.
+    ///
+    /// This takes ownership of the buffer, and returns a future which resolves
+    /// to a tuple of the original buffer and the number of bytes sent.
+    pub fn send<B: StableBuf>(&self, buf: B) -> Op<socket::Send<B>> {
+        self.socket.send(buf)
+    }
+
+    /// Recv data using the given buffer ring.
+    ///
+    /// A buffer will be taken from the ring when the operation is completed
+    /// and returned. If there are no buffers available, the operation will
+    /// fail.
+    pub fn recv_ring(&self, ring: &BufRing) -> Op<socket::RecvFromRing> {
+        self.socket.recv_from_ring(ring)
+    }
+
+    /// Convert this socket into a stream.
+    ///
+    /// [`TcpStream`] is a stateful wrapper around [`TcpSocket`] that implements
+    /// [`AsyncRead`](tokio::io::AsyncRead) and [`AsyncWrite`](tokio::io::AsyncWrite).
+    pub fn into_stream(self) -> TcpStream {
         let reader = TcpStreamReader {
             inner: ReadyStream::new(self.socket.clone()),
         };
         let writer = TcpStreamWriter {
             inner: ReadyStream::new(self.socket.clone()),
         };
-        (reader, writer)
+
+        TcpStream { reader, writer }
     }
 
     /// Close the socket.
@@ -149,29 +207,47 @@ impl TcpStream {
     }
 }
 
-impl crate::io::AsyncReadOwned for TcpStream {
-    type ReadFuture<'a, B> = Op<socket::Recv<B>>
-    where
-        B: StableBufMut,
-        Self: 'a;
-
-    fn read<B: StableBufMut>(&mut self, buf: B) -> Self::ReadFuture<'_, B> {
-        self.socket.recv(buf)
+impl TcpStream {
+    /// Split the stream into a reader and writer.
+    pub fn owned_split(self) -> (TcpStreamReader, TcpStreamWriter) {
+        (self.reader, self.writer)
     }
 }
 
-impl crate::io::AsyncWriteOwned for TcpStream {
-    type WriteFuture<'a, B> = Op<socket::Send<B>>
-    where
-        B: StableBuf,
-        Self: 'a;
+impl tokio::io::AsyncRead for TcpStream {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        let this = self.project();
+        this.reader.poll_read(cx, buf)
+    }
+}
 
-    fn write<B: StableBuf>(&mut self, buf: B) -> Self::WriteFuture<'static, B> {
-        self.socket.send(buf)
+impl tokio::io::AsyncWrite for TcpStream {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        let this = self.project();
+        this.writer.poll_write(cx, buf)
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
+        let this = self.project();
+        this.writer.poll_flush(cx)
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
+        let this = self.project();
+        this.writer.poll_shutdown(cx)
     }
 }
 
 pin_project_lite::pin_project! {
+    /// [`TcpStreamReader`] is the read half of a [`TcpStream`].
     pub struct TcpStreamReader {
         #[pin]
         inner: ReadyStream,
@@ -179,6 +255,7 @@ pin_project_lite::pin_project! {
 }
 
 pin_project_lite::pin_project! {
+    /// [`TcpStreamWriter`] is the write half of a [`TcpStream`].
     pub struct TcpStreamWriter {
         #[pin]
         inner: ReadyStream,
@@ -260,24 +337,24 @@ impl ReadyStream {
         flags: u32,
     ) -> Poll<io::Result<U>> {
         loop {
-            log::trace!("poll_op");
+            log::trace!(target: LOG, "poll_op");
             ready!(self.as_mut().poll_ready(cx, flags))?;
-            log::trace!("poll_op.ready");
+            log::trace!(target: LOG, "poll_op.ready");
             let this = self.as_mut().project();
             let sock = this.inner.as_socket();
             match f(sock) {
                 Ok(res) => {
-                    log::trace!("poll_op.success");
+                    log::trace!(target: LOG, "poll_op.success");
                     return Poll::Ready(Ok(res));
                 }
                 Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
-                    log::trace!("poll_op.would_block");
+                    log::trace!(target: LOG, "poll_op.would_block");
                     *this.notified = false;
                     ready!(self.as_mut().poll_ready(cx, flags))?;
                     continue;
                 }
                 Err(err) => {
-                    log::trace!("poll_op.err");
+                    log::trace!(target: LOG, "poll_op.err");
                     return Poll::Ready(Err(err));
                 }
             }
@@ -295,12 +372,15 @@ impl ReadyStream {
             }
             if let Some(armed) = this.armed.as_mut().as_pin_mut() {
                 if let Some(res) = ready!(armed.poll_next(cx)) {
+                    log::trace!(target: LOG, "poll_op.ready.stream_notified");
                     res?;
                     *this.notified = true;
                 } else {
+                    log::trace!(target: LOG, "poll_op.ready.stream_done");
                     this.armed.set(None);
                 }
             } else {
+                log::trace!(target: LOG, "poll_op.ready.stream_arm");
                 this.armed.set(Some(this.inner.poll_ready(flags)));
             }
         }

@@ -4,7 +4,7 @@ use std::pin::pin;
 
 use futures_util::StreamExt;
 use norn_executor::spawn;
-use norn_uring::net::{TcpListener, TcpStream};
+use norn_uring::net::{TcpListener, TcpSocket};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 mod util;
@@ -17,7 +17,7 @@ fn incoming_connections() -> Result<(), Box<dyn std::error::Error>> {
 
         // Connect
         let handle = spawn(async {
-            let _ = TcpStream::connect("0.0.0.0:9090".parse().unwrap()).await?;
+            let _ = TcpSocket::connect("0.0.0.0:9090".parse().unwrap()).await?;
             io::Result::Ok(())
         });
 
@@ -37,14 +37,14 @@ fn echo() -> Result<(), Box<dyn std::error::Error>> {
 
         let addr = server.local_addr()?;
         spawn(server.run()).detach();
-        let conn = TcpStream::connect(addr).await?;
+        let conn = TcpSocket::connect(addr).await?;
 
         // Create a 128KB buffer containing the string "hello" repeated.
         let mut buf = Vec::with_capacity(128 * 1024);
         for _ in 0..128 {
             buf.extend_from_slice(b"hello");
         }
-        let (reader, writer) = conn.split();
+        let (reader, writer) = conn.into_stream().owned_split();
         let mut writer = pin!(writer);
         let mut reader = pin!(reader);
         writer.write_all(&buf[..]).await?;
@@ -53,7 +53,6 @@ fn echo() -> Result<(), Box<dyn std::error::Error>> {
         println!("doing read");
         reader.read_exact(&mut buf2[..]).await?;
         assert_eq!(buf, buf2);
-        //reader.read(buf.as_mut_slice()).await?;
 
         Ok(())
     })
@@ -78,11 +77,9 @@ impl EchoServer {
         while let Some(stream) = incoming.next().await {
             let stream = stream?;
             spawn(async move {
-                let (mut reader, mut writer) = stream.split();
+                let (mut reader, mut writer) = stream.into_stream().owned_split();
                 let mut reader = pin!(reader);
                 let mut writer = pin!(writer);
-                println!("starting copy");
-                // Generate a 32MB buffer of the string hello repeated.
                 if let Err(err) = tokio::io::copy(&mut reader, &mut writer).await {
                     log::error!("error copying: {:?}", err)
                 }

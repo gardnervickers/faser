@@ -20,7 +20,6 @@ pub(crate) mod util;
 pub mod buf;
 pub mod bufring;
 pub mod fs;
-pub mod io;
 pub mod net;
 
 pub use driver::{Driver, Handle};
