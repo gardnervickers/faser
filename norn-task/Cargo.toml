@@ -5,9 +5,9 @@ edition = "2021"
 
 [dependencies]
 bitflags = "2.4.1"
-cordyceps = "0.3.2"
+cordyceps.workspace = true
 
 [dev-dependencies]
-futures = "0.3.29"
+futures.workspace = true
 
 
