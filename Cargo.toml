@@ -1,3 +1,7 @@
 [workspace]
 resolver = "2"
 members = [ "benches", "norn-executor", "norn-task" , "norn-timer", "norn-uring"]
+
+[profile.bench]
+codegen-units = 1
+incremental = false
