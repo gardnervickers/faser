@@ -9,7 +9,6 @@
     rust_2018_idioms,
     clippy::missing_safety_doc
 )]
-#![feature(impl_trait_in_assoc_type)]
 
 pub(crate) mod driver;
 pub(crate) mod error;
