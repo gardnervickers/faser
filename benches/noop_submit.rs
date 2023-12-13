@@ -17,7 +17,14 @@ impl NoopBench {
 
 impl bencher::TDynBenchFn for NoopBench {
     fn run(&self, b: &mut Bencher) {
-        let ring = norn_uring::Driver::new(io_uring::IoUring::builder(), 32).unwrap();
+        let mut builder = io_uring::IoUring::builder();
+        builder
+            .dontfork()
+            .setup_coop_taskrun()
+            .setup_defer_taskrun()
+            .setup_single_issuer()
+            .setup_submit_all();
+        let ring = norn_uring::Driver::new(builder, 32).unwrap();
         let mut executor = norn_executor::LocalExecutor::new(ring);
         b.iter(|| {
             let tasks = self.0;

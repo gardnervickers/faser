@@ -30,7 +30,13 @@ impl HyperBench {
 }
 impl bencher::TDynBenchFn for HyperBench {
     fn run(&self, b: &mut bencher::Bencher) {
-        let builder = io_uring::IoUring::builder();
+        let mut builder = io_uring::IoUring::builder();
+        builder
+            .dontfork()
+            .setup_coop_taskrun()
+            .setup_defer_taskrun()
+            .setup_single_issuer()
+            .setup_submit_all();
         let driver = norn_uring::Driver::new(builder, 32).unwrap();
         let driver = norn_timer::Driver::new(driver, Clock::system());
         let mut ex = norn_executor::LocalExecutor::new(driver);
