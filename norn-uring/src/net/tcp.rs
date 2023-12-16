@@ -444,7 +444,7 @@ impl ReadyStream {
                 }
             } else {
                 log::trace!(target: LOG, "poll_op.ready.stream_arm");
-                this.armed.set(Some(this.inner.poll_ready(flags)));
+                this.armed.set(Some(this.inner.poll_readiness(flags)));
             }
         }
     }

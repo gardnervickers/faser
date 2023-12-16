@@ -131,7 +131,7 @@ impl Socket {
         self.handle.submit(op).await
     }
 
-    pub(crate) fn poll_ready<const MULTI: bool>(&self, events: u32) -> Op<Poll<MULTI>> {
+    pub(crate) fn poll_readiness<const MULTI: bool>(&self, events: u32) -> Op<Poll<MULTI>> {
         let op = Poll::<MULTI>::new(self.fd.clone(), events);
         self.handle.submit(op)
     }
