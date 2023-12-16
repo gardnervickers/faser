@@ -56,7 +56,6 @@ impl Socket {
         let addr = SockAddr::from(addr);
         let socket = Self::open(domain, socket_type, None).await?;
         let s = socket.as_socket();
-        s.set_reuse_address(true)?;
         s.bind(&addr)?;
         Ok(socket)
     }

@@ -47,12 +47,14 @@ fn echo() -> Result<(), Box<dyn std::error::Error>> {
         let (reader, writer) = conn.into_stream().owned_split();
         let mut writer = pin!(writer);
         let mut reader = pin!(reader);
-        writer.write_all(&buf[..]).await?;
-        writer.flush().await?;
-        let mut buf2 = vec![0; buf.len()];
-        println!("doing read");
-        reader.read_exact(&mut buf2[..]).await?;
-        assert_eq!(buf, buf2);
+
+        for _ in 0..10 {
+            writer.write_all(&buf[..]).await?;
+            writer.flush().await?;
+            let mut buf2 = vec![0; buf.len()];
+            reader.read_exact(&mut buf2[..]).await?;
+            assert_eq!(buf, buf2);
+        }
 
         Ok(())
     })
@@ -74,10 +76,13 @@ impl EchoServer {
 
     async fn run(self) -> io::Result<()> {
         let mut incoming = pin!(self.listener.incoming());
-        while let Some(stream) = incoming.next().await {
-            let stream = stream?;
+        while let Some(socket) = incoming.next().await {
+            let socket = socket?;
+            // Set small buffer size to test the blocking behavior.
+            socket.set_recv_buffer_size(64)?;
+            socket.set_send_buffer_size(64)?;
             spawn(async move {
-                let (mut reader, mut writer) = stream.into_stream().owned_split();
+                let (mut reader, mut writer) = socket.into_stream().owned_split();
                 let mut reader = pin!(reader);
                 let mut writer = pin!(writer);
                 if let Err(err) = tokio::io::copy(&mut reader, &mut writer).await {

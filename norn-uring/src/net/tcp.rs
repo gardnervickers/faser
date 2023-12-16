@@ -74,6 +74,11 @@ impl TcpListener {
         Ok(TcpListener { socket: inner })
     }
 
+    /// Set value for the SO_REUSEADDR option on this socket.
+    pub fn set_reuse_address(&self, reuse: bool) -> io::Result<()> {
+        self.socket.as_socket().set_reuse_address(reuse)
+    }
+
     /// Returns the local address that this listener is bound to.
     pub fn local_addr(&self) -> io::Result<SocketAddr> {
         self.socket.local_addr()
@@ -204,6 +209,29 @@ impl TcpSocket {
     /// Close the socket.
     pub async fn close(self) -> io::Result<()> {
         self.socket.close().await
+    }
+
+    /// Set value for the SO_RCVBUF option on this socket.
+    pub fn set_recv_buffer_size(&self, size: usize) -> io::Result<()> {
+        self.socket.as_socket().set_recv_buffer_size(size)
+    }
+    /// Set value for the SO_SNDBUF option on this socket.
+    pub fn set_send_buffer_size(&self, size: usize) -> io::Result<()> {
+        self.socket.as_socket().set_send_buffer_size(size)
+    }
+
+    /// Set value for the SO_REUSEADDR option on this socket.
+    pub fn set_reuse_address(&self, reuse: bool) -> io::Result<()> {
+        self.socket.as_socket().set_reuse_address(reuse)
+    }
+
+    /// Set value for the SO_KEEPALIVE option on this socket.
+    pub fn set_keepalive(&self, keepalive: bool) -> io::Result<()> {
+        self.socket.as_socket().set_keepalive(keepalive)
+    }
+    /// Set the value of the TCP_NODELAY option on this socket.
+    pub fn set_nodelay(&self, nodelay: bool) -> io::Result<()> {
+        self.socket.as_socket().set_nodelay(nodelay)
     }
 }
 
