@@ -695,19 +695,67 @@ impl<const MULTI: bool> Operation for Poll<MULTI> {
 }
 
 impl Multishot for Poll<true> {
-    type Item = io::Result<()>;
+    type Item = io::Result<Event>;
 
     fn update(&mut self, result: crate::operation::CQEResult) -> Self::Item {
-        result.result?;
-        Ok(())
+        let res = result.result?;
+        let event = Event::new(res as i16);
+        Ok(event)
     }
 }
 
 impl Singleshot for Poll<false> {
-    type Output = io::Result<()>;
+    type Output = io::Result<Event>;
 
     fn complete(self, result: crate::operation::CQEResult) -> Self::Output {
-        result.result?;
-        Ok(())
+        let res = result.result?;
+        let event = Event::new(res as i16);
+        Ok(event)
+    }
+}
+
+/// [`Event`] captures the notification state of a polled
+/// socket.
+#[derive(Debug, Clone, Copy)]
+#[must_use = "events must be handled"]
+pub struct Event {
+    events: i16,
+}
+
+impl Event {
+    fn new(events: i16) -> Self {
+        Self { events }
+    }
+
+    /// Returns true if the socket is readable.
+    pub fn is_readable(&self) -> bool {
+        (self.events & libc::POLLIN) != 0 || (self.events & libc::POLLPRI) != 0
+    }
+
+    /// Returns true if the socket is writeable.
+    pub fn is_writeable(&self) -> bool {
+        (self.events & libc::POLLOUT) != 0
+    }
+
+    /// Returns true if the socket has an error.
+    pub fn is_error(&self) -> bool {
+        (self.events & libc::POLLERR) != 0
+    }
+
+    /// Returns true if the socket is closed for reads.
+    pub fn is_read_closed(&self) -> bool {
+        (self.events & libc::POLLHUP) != 0 || (self.events & libc::POLLRDHUP) != 0
+    }
+
+    /// Returns true if the socket is closed for writes.
+    pub fn is_write_closed(&self) -> bool {
+        (self.events & libc::POLLHUP) != 0
+            || ((self.events & libc::POLLOUT) != 0 && (self.events & libc::POLLERR) != 0)
+            || (self.events == libc::POLLERR)
+    }
+
+    /// Returns true if there is a priority event.
+    pub fn is_priority(&self) -> bool {
+        (self.events & libc::POLLPRI) != 0
     }
 }

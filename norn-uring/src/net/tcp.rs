@@ -14,7 +14,7 @@ use crate::operation::Op;
 
 use super::socket::Accept;
 
-const LOG: &str = "norn-uring::net::tcp";
+const LOG: &str = "norn_uring::net::tcp";
 
 /// A TCP listener.
 ///
@@ -436,7 +436,7 @@ impl ReadyStream {
             if let Some(armed) = this.armed.as_mut().as_pin_mut() {
                 if let Some(res) = ready!(armed.poll_next(cx)) {
                     log::trace!(target: LOG, "poll_op.ready.stream_notified");
-                    res?;
+                    let _ = res?;
                     *this.notified = true;
                 } else {
                     log::trace!(target: LOG, "poll_op.ready.stream_done");
