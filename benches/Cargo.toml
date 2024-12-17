@@ -11,7 +11,7 @@ norn-task = { path = "../norn-task" }
 norn-uring = { path = "../norn-uring" }
 norn-executor = { path = "../norn-executor" }
 norn-timer = { path = "../norn-timer" }
-io-uring = "0.6"
+io-uring = "0.7"
 hyper = { version = "1", features = ["client", "server", "http2"] }
 pin-project-lite = "0.2.13"
 tokio = { version = "1.35.0", features = ["io-util"] }
