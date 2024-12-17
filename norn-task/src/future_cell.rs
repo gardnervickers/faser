@@ -161,6 +161,7 @@ impl TaskError {
 
 enum Kind {
     Cancelled,
+    #[allow(dead_code)]
     Panic(Box<dyn Any + Send + 'static>),
 }
 

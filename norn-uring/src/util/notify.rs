@@ -200,8 +200,8 @@ unsafe impl Linked<list::Links<Entry>> for Entry {
     }
 
     unsafe fn links(target: NonNull<Self>) -> NonNull<list::Links<Entry>> {
-        // Safety: addr_of avoids the need to create a temporary reference.
-        let links = ptr::addr_of!((*target.as_ptr()).links);
+        // Safety: &raw const avoids the need to create a temporary reference.
+        let links = &raw const (*target.as_ptr()).links;
         // Safety: target is nonnull, so the reference to it's pointers are also nonnull.
         unsafe { NonNull::new_unchecked((*links).get()) }
     }

@@ -384,7 +384,8 @@ impl<T> JoinHandleRef<T> {
         // Safety: The task is valid as long as we have a TaskRef. It is always
         // safe to poll the task.
         unsafe {
-            let target = std::ptr::addr_of_mut!(retval).cast::<()>();
+            let target = &raw mut retval;
+            let target = target.cast::<()>();
             (vtable.try_read_output)(self.0 .0, target, waker);
         };
         retval

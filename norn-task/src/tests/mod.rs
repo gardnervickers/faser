@@ -88,7 +88,7 @@ impl Future for TestFuture {
             if s.return_pending {
                 Poll::Pending
             } else {
-                Poll::Ready(TestFutureOutput(Box::new(0)))
+                Poll::Ready(TestFutureOutput())
             }
         })
     }
@@ -103,7 +103,7 @@ impl Drop for TestFuture {
     }
 }
 
-struct TestFutureOutput(Box<usize>);
+struct TestFutureOutput();
 
 impl Drop for TestFutureOutput {
     fn drop(&mut self) {
@@ -168,7 +168,7 @@ impl TestState {
     }
 }
 
-thread_local! {static STATE: RefCell<Option<TestState>> = RefCell::new(None)}
+thread_local! {static STATE: RefCell<Option<TestState>> = const { RefCell::new(None) }}
 
 async fn yield_now() {
     struct YieldNow(bool);

@@ -175,7 +175,7 @@ unsafe impl Linked<list::Links<Entry>> for Entry {
     }
 
     unsafe fn links(ptr: ptr::NonNull<Self>) -> ptr::NonNull<list::Links<Entry>> {
-        let links = ptr::addr_of!((*ptr.as_ptr()).pointers);
+        let links = &raw const (*ptr.as_ptr()).pointers;
         ptr::NonNull::new_unchecked((*links).get())
     }
 }

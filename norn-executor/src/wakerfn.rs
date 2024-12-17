@@ -61,7 +61,7 @@ fn waker_fn(f: Rc<Cell<bool>>) -> Waker {
 }
 
 #[derive(Clone)]
-struct Helper(Rc<Cell<bool>>);
+struct Helper();
 
 impl Helper {
     const VTABLE: RawWakerVTable = RawWakerVTable::new(

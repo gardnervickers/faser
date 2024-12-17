@@ -1,2 +1,2 @@
 #!/bin/bash
-MIRIFLAGS="" cargo +nightly miri test -- $1
+MIRIFLAGS="" cargo miri test -- $1

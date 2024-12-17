@@ -103,7 +103,7 @@ unsafe impl cordyceps::Linked<cordyceps::list::Links<Header>> for Header {
 
     unsafe fn links(ptr: ptr::NonNull<Self>) -> ptr::NonNull<cordyceps::list::Links<Header>> {
         let me = ptr.as_ptr();
-        let links = ptr::addr_of_mut!((*me).links);
+        let links = &raw mut (*me).links;
         ptr::NonNull::new_unchecked(links)
     }
 }
