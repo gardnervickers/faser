@@ -2,3 +2,5 @@
 lcov.info
 control
 variable
+/.direnv
+result
