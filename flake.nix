@@ -1,5 +1,4 @@
-{
-  inputs = {
+{ inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     utils.url = "github:numtide/flake-utils";
     fenix.url = "github:nix-community/fenix";
@@ -7,10 +6,10 @@
 
   outputs =
     {
-      self,
       nixpkgs,
       fenix,
       utils,
+      ...
     }:
     utils.lib.eachDefaultSystem (
       system:
@@ -21,7 +20,7 @@
           overlays = overlays;
         };
         fx = fenix.packages.${system};
-        rust-toolchain = fx.combine [
+        rust-toolchain-nightly = fx.combine [
           fx.latest.cargo
           fx.latest.rustc
           fx.latest.rust-analyzer
@@ -32,11 +31,11 @@
         ];
       in
       {
-        devShell = pkgs.mkShell {
+        devShells.default = pkgs.mkShell {
           nativeBuildInputs = [
             pkgs.cargo-udeps
             pkgs.cargo-outdated
-            rust-toolchain
+            rust-toolchain-nightly
           ];
         };
       }
