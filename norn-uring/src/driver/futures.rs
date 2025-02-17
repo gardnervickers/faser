@@ -37,7 +37,7 @@ impl PushFuture {
     }
 }
 
-impl<'a> Future for PushFutureInner<'a> {
+impl Future for PushFutureInner<'_> {
     type Output = Result<(), SubmitError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {

@@ -121,7 +121,7 @@ pin_project! {
     }
 }
 
-impl<'notify> Future for Notified<'notify> {
+impl Future for Notified<'_> {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {

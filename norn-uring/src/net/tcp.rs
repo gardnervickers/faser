@@ -112,7 +112,7 @@ pin_project_lite::pin_project! {
     }
 }
 
-impl<'a> Stream for Incoming<'a> {
+impl Stream for Incoming<'_> {
     type Item = io::Result<TcpSocket>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
@@ -137,6 +137,10 @@ impl<'a> Stream for Incoming<'a> {
             }
             this.current.set(Some(this.listener.accept_multi()));
         }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (0, None)
     }
 }
 

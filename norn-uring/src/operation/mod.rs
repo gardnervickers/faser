@@ -340,9 +340,7 @@ where
     where
         T: Multishot,
     {
-        let Some(completion) = self.inner.pop_completion() else {
-            return None;
-        };
+        let completion = self.inner.pop_completion()?;
         let data = unsafe { self.inner.data_mut() }.expect("operation already completed");
         Some(data.update(completion))
     }
